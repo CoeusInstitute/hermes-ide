@@ -45,7 +45,15 @@ Cursor's interaction model, as it applies here:
 - Agent edits appear in the editor as inline diffs with per-hunk and per-file Keep and Undo.
 - The browser can select an element on the page and attach it to the chat.
 
-The workstation reference screenshot mentioned in the request did not reach this run as an image, so the comparison above is from the installed Cursor itself.
+The reference screenshot (Cursor with the Omni-53 workspace, received after v0.1 shipped) confirms this layout and adds detail:
+
+- **Three columns:** Explorer about 1/8 of the width, the center about 7/12, the agent about 1/3.
+- **The center is the built-in browser, not a code editor.** It renders the running app in an editor tab with an address bar, an element picker, a device/responsive toggle and a comment tool. Cursor treats the rendered app as the main working surface.
+- **Agent chats are tabs** in the right column (`+`, history), separate from the editor tabs.
+- **A `9 Files · Review` strip sits above the composer:** every file the chat changed, reviewable in one place.
+- **The composer** has a mode picker (`Agent`), a model picker, `/` for skills and `@` for context.
+- **The status bar** shows the git branch with dirty state, problem counts, and the current commit.
+- **The Explorer** uses language-colored file icons, a workspace header, git dots on folders, and collapsed Outline and Timeline sections.
 
 ## 3. Hermes Desktop (observed)
 

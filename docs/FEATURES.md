@@ -63,9 +63,17 @@ Wiring legend:
 
 ## Gate 1: Cursor parity polish (next)
 
+Ordered by the gap against the reference screenshot (see docs/RESEARCH.md section 2). The first four close the visible differences.
+
 | Feature | Wiring | Acceptance test |
 |---|---|---|
-| Review all files touched in a turn, with Keep All / Undo All | Add a "Changes in this chat" list fed by `tool.complete` paths, pre-edit snapshots kept per turn | An agent turn that edits 3 files lists all 3; Undo All restores all 3 byte-for-byte |
+| Browser in the center: open a running app (`localhost` dev server or URL) as the main surface, chat on the right | Reuse the Desktop Browser; add an "IDE: Open App URL" command and a layout preset that docks the Browser where the Editor tile sits, with the Editor tile stacked behind it | One command shows Explorer, the rendered app in the center and the chat on the right; Annotate works on it |
+| Changed-files strip above the chat ("9 Files · Review") | Add a composer `top` contribution listing files the session's tool calls wrote, each opening the inline review; Keep All / Undo All | After a turn that edits 3 files the strip reads "3 Files"; Undo All restores all 3 byte-for-byte |
+| Status bar: branch with dirty marker, ahead/behind, current commit | Mirror `/git/status` (add `git rev-parse --short HEAD`) | Branch and commit update after the agent commits |
+| Chats as tabs in the right column | Reuse sessions: open chats with `host.openSession(id, { intent: 'tab' })`, plus a `+` and history in the IDE layout | Two chats open as tabs beside the editor; switching tabs switches the IDE's tab set |
+| Language-colored file icons, workspace header, collapsed Outline section | Add | Icons match file type; the header names the workspace |
+| Composer mode picker (Agent / Plan / Ask) | Reuse the catalog plugin `composer-modes` rather than rebuild it | Installed alongside; modes reach the session |
+| Device / responsive preview sizes | Upstream ask if the Desktop Browser lacks it; otherwise reuse | The rendered app can switch to a phone width |
 | Picked element → jump to source | Add: on an Annotate handoff, search the workspace for the element's id, classes and text (`/search`), open the best match | Picking `#title` opens `index.html` at the `<h1>` line |
 | Explorer keyboard navigation, multi-select, drag to move, drop files from the OS | Add | Arrow keys move, Enter opens, F2 renames, Delete trashes; dragging a file into a folder moves it without overwrite |
 | Split editor and tab drag-reorder | Add a second editor frame bound to the same buffers | Edits in one split appear in the other; order persists per session |
