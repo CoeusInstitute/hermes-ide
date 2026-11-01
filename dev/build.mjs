@@ -2,11 +2,20 @@
 // react/jsx-runtime (the only specifiers the Hermes Desktop disk loader resolves). The CodeMirror
 // editor is bundled separately into an IIFE and inlined as the editor frame's srcdoc.
 //
-//   node build.mjs           build once
-//   node build.mjs --watch   rebuild on change
+//   cd dev && npm ci && npm run build      build once
+//   npm run watch                          rebuild on change
 
 import { build, context } from 'esbuild'
-import { readFileSync, statSync, writeFileSync } from 'node:fs'
+import { readFileSync, statSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+// Dev tooling lives in dev/ so the installed plugin carries no package.json (Hermes would offer
+// to npm-install it). Paths below are relative to the repository root.
+const DEV = dirname(fileURLToPath(import.meta.url))
+const ROOT = resolve(DEV, '..')
+process.chdir(ROOT)
+const nodePaths = [resolve(DEV, 'node_modules')]
 
 const watch = process.argv.includes('--watch')
 const EXTERNAL = ['@hermes/plugin-sdk', 'react', 'react/jsx-runtime']
@@ -34,7 +43,9 @@ async function frameHtml() {
     minify: true,
     write: false,
     target: 'chrome120',
-    legalComments: 'none'
+    legalComments: 'none',
+    nodePaths,
+    absWorkingDir: ROOT
   })
   // Inline <script>: a literal "</script" anywhere in the bundle would end the element early.
   const js = out.outputFiles[0].text.replace(/<\/script/gi, '<\\/script')
@@ -83,7 +94,9 @@ const options = {
   external: EXTERNAL,
   minifySyntax: true,
   legalComments: 'none',
-  banner: { js: '// Hermes IDE desktop plugin. Built from src/ by build.mjs; do not edit by hand.' },
+  nodePaths,
+  absWorkingDir: ROOT,
+  banner: { js: '// Hermes IDE desktop plugin. Built from src/ by dev/build.mjs; do not edit by hand.' },
   plugins: [framePlugin, checkImports]
 }
 

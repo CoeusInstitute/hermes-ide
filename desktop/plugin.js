@@ -1,4 +1,4 @@
-// Hermes IDE desktop plugin. Built from src/ by build.mjs; do not edit by hand.
+// Hermes IDE desktop plugin. Built from src/ by dev/build.mjs; do not edit by hand.
 
 // src/plugin.tsx
 import * as sdk from "@hermes/plugin-sdk";
