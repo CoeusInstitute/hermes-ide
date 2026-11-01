@@ -23,7 +23,8 @@ import {
   $folderDialog,
   $quickOpen,
   $active,
-  addToChat
+  addToChat,
+  applyPendingCwd
 } from './core'
 import { Dialogs, EditorPane, OpenCard, SettingsPage, Sidebar, StatusItem } from './ui'
 
@@ -110,6 +111,7 @@ export default {
       }
     })
     ctx.onEvent('tool.complete', onToolComplete)
+    ctx.onEvent('message.complete', () => void applyPendingCwd())
     ctx.addEventListener(window, 'focus', () => scheduleRefresh())
 
     // 1:1 with the session: the IDE's tab set and folder follow the chat in focus.

@@ -165,14 +165,22 @@ const chrome = EditorView.theme({
   },
   '.cm-tooltip': { backgroundColor: 'var(--ui-bg-elevated, var(--ui-bg-secondary))', color: 'var(--ui-text-primary)', border: '1px solid var(--ui-stroke-secondary)', borderRadius: '6px' },
   '.cm-tooltip-autocomplete > ul > li[aria-selected]': { backgroundColor: 'var(--ui-row-active-background)', color: 'var(--ui-text-primary)' },
-  // Agent-edit review (unified diff against the pre-edit text).
-  '.cm-changedLine': { backgroundColor: 'var(--ui-diff-add-background, color-mix(in srgb, var(--ui-green) 12%, transparent)) !important' },
-  '.cm-changedText': { background: 'color-mix(in srgb, var(--ui-green) 28%, transparent) !important' },
-  '.cm-deletedChunk': { backgroundColor: 'var(--ui-diff-remove-background, color-mix(in srgb, var(--ui-red) 12%, transparent))' },
-  '.cm-deletedChunk .cm-deletedText': { background: 'color-mix(in srgb, var(--ui-red) 28%, transparent)' },
-  '.cm-deletedChunk .cm-chunkButtons button': { fontFamily: 'var(--font-sans)', fontSize: '11px', borderRadius: '4px', border: '1px solid var(--ui-stroke-secondary)', cursor: 'pointer' },
-  '.cm-deletedChunk .cm-chunkButtons button[name=accept]': { background: 'color-mix(in srgb, var(--ui-green) 30%, transparent)', color: 'var(--ui-text-primary)' },
-  '.cm-deletedChunk .cm-chunkButtons button[name=reject]': { background: 'color-mix(in srgb, var(--ui-red) 30%, transparent)', color: 'var(--ui-text-primary)' }
+  // Agent-edit review (unified diff against the pre-edit text). Low-chroma fills so the code keeps
+  // its own colors and stays readable; hunk buttons get their own row instead of covering code.
+  '.cm-changedLine': { backgroundColor: 'color-mix(in srgb, var(--ui-green) 9%, transparent) !important' },
+  '.cm-changedText': { background: 'color-mix(in srgb, var(--ui-green) 20%, transparent) !important' },
+  '.cm-deletedChunk': { backgroundColor: 'color-mix(in srgb, var(--ui-red) 9%, transparent)', paddingTop: '2px' },
+  '.cm-deletedChunk .cm-deletedText, .cm-deletedChunk del': { background: 'color-mix(in srgb, var(--ui-red) 20%, transparent)', textDecoration: 'none' },
+  '.cm-deletedChunk .cm-chunkButtons': { position: 'static', display: 'flex', gap: '6px', padding: '2px 0 4px 6px' },
+  '.cm-deletedChunk .cm-chunkButtons button': {
+    fontFamily: 'var(--font-sans)', fontSize: '11px', lineHeight: '16px', padding: '1px 9px', borderRadius: '5px', cursor: 'pointer',
+    color: 'var(--ui-text-primary)', border: '1px solid var(--ui-stroke-secondary)', background: 'var(--ui-bg-quaternary, transparent)'
+  },
+  '.cm-deletedChunk .cm-chunkButtons button[name=accept]': { borderColor: 'color-mix(in srgb, var(--ui-green) 45%, transparent)' },
+  '.cm-deletedChunk .cm-chunkButtons button[name=reject]': { borderColor: 'color-mix(in srgb, var(--ui-red) 45%, transparent)' },
+  '.cm-changeGutter': { width: '3px', paddingLeft: '1px' },
+  '.cm-changedLineGutter': { background: 'var(--ui-green)' },
+  '.cm-deletedLineGutter': { background: 'var(--ui-red)' }
 })
 
 // ── inline edit (Ctrl+K): a prompt panel bound to the current selection ──────────────────────
@@ -264,7 +272,7 @@ function save() {
     return true
   }
   f.pendingSave = f.state.doc
-  send({ type: 'save', path: currentPath, text: f.state.doc.toString() })
+  send({ type: 'save', path: currentPath, text: f.state.sliceDoc() })
   return true
 }
 
@@ -361,7 +369,7 @@ function onDocChanged(path: string) {
   draftTimer = window.setTimeout(() => {
     const cur = files.get(path)
     if (cur) {
-      send({ type: 'draft', path, text: cur.wasDirty ? cur.state.doc.toString() : null })
+      send({ type: 'draft', path, text: cur.wasDirty ? cur.state.sliceDoc() : null })
     }
   }, 400)
   const chunks = getChunks(f.state)
@@ -572,7 +580,7 @@ const handlers: Record<string, (m: Msg) => void> = {
       const dirty = !f.state.doc.eq(f.saved)
       f.wasDirty = dirty
       send({ type: 'dirty', path: m.path, dirty })
-      send({ type: 'draft', path: m.path, text: dirty ? f.state.doc.toString() : null })
+      send({ type: 'draft', path: m.path, text: dirty ? f.state.sliceDoc() : null })
     }
   },
   saveRequest: m => {
@@ -582,7 +590,7 @@ const handlers: Record<string, (m: Msg) => void> = {
         f.state = view.state
       }
       f.pendingSave = f.state.doc
-      send({ type: 'save', path: m.path, text: f.state.doc.toString() })
+      send({ type: 'save', path: m.path, text: f.state.sliceDoc() })
     }
   },
   inlineEdit: () => view.dispatch({ effects: toggleInline.of(true) }),

@@ -16,9 +16,9 @@ import {
   DialogTitle,
   host,
   Input,
+  MessageTextContent,
   SegmentedControl,
   ToggleRow,
-  useTheme,
   useValue
 } from '@hermes/plugin-sdk'
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -28,6 +28,7 @@ import FRAME_HTML from 'virtual:frame-html'
 import {
   $active,
   $backend,
+  $browserTarget,
   $banners,
   $confirmClose,
   $cursor,
@@ -633,14 +634,30 @@ async function openDiff(path: string, code: string) {
 /** The app's theme tokens, resolved for the element the editor sits in. */
 const TOKENS = ['--font-sans', '--font-mono', '--ui-text-primary', '--ui-text-secondary', '--ui-text-tertiary', '--ui-text-quaternary', '--ui-accent', '--ui-accent-secondary', '--ui-stroke-primary', '--ui-stroke-secondary', '--ui-stroke-tertiary', '--ui-stroke-quaternary', '--ui-bg-primary', '--ui-bg-secondary', '--ui-bg-tertiary', '--ui-bg-quaternary', '--ui-bg-elevated', '--ui-bg-input', '--ui-bg-editor', '--ui-editor-surface-background', '--ui-selection-background', '--ui-row-hover-background', '--ui-row-active-background', '--ui-control-hover-background', '--ui-control-active-background', '--ui-diff-add-background', '--ui-diff-remove-background', '--ui-diff-add-foreground', '--ui-diff-remove-foreground', '--ui-red', '--ui-green', '--ui-yellow', '--ui-orange', '--ui-blue', '--ui-purple', '--ui-cyan']
 
-function readLook(el: Element, dark: boolean) {
+function readLook(el: Element) {
   const cs = getComputedStyle(el)
   const vars: Record<string, string> = {}
   for (const name of TOKENS) {
     const v = cs.getPropertyValue(name).trim()
     if (v) vars[name] = v
   }
-  return { vars, dark }
+  return { vars, dark: isLight(vars['--ui-text-primary']) }
+}
+
+/** The surface is dark when its primary text is light: works for every skin, including ones
+ *  that keep a bright surface in "dark" mode. */
+function isLight(color: string | undefined) {
+  if (!color) return false
+  const probe = document.createElement('span')
+  probe.style.color = color
+  document.body.appendChild(probe)
+  const resolved = getComputedStyle(probe).color // "rgb(r, g, b)" or "color(srgb r g b / a)" with 0-1 channels
+  probe.remove()
+  const nums = (resolved.match(/[\d.]+/g) || []).map(Number)
+  if (nums.length < 3) return false
+  const scale = resolved.startsWith('color(') ? 255 : 1
+  const [r, g, b] = nums.slice(0, 3).map(v => v * scale)
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b > 140
 }
 
 export function EditorPane() {
@@ -648,29 +665,36 @@ export function EditorPane() {
   const active = useValue($active)
   const banners = useValue($banners)
   const confirmClose = useValue($confirmClose)
-  const { renderedMode, themeName, theme } = useTheme()
   const accent = useValue($accentOverride)
   const frameRef = useRef<HTMLIFrameElement>(null)
-  const dark = renderedMode === 'dark'
-  const darkRef = useRef(dark)
-  darkRef.current = dark
 
   useEffect(() => {
     const el = frameRef.current
     if (!el) return
-    attachFrame(el.contentWindow, () => readLook(el.parentElement || el, darkRef.current))
+    attachFrame(el.contentWindow, () => readLook(el.parentElement || el))
     const off = ctx.addEventListener(window, 'message', onFrameMessage as EventListener)
+    // Skins, light/dark and accent repaint by rewriting :root attributes and inline tokens, often
+    // in several passes; wait for the writes to settle before reading the resolved tokens.
+    let timer = 0
+    const repaint = () => {
+      clearTimeout(timer)
+      timer = window.setTimeout(postLook, 250)
+    }
+    const mo = new MutationObserver(repaint)
+    mo.observe(document.documentElement, { attributes: true })
+    mo.observe(document.body, { attributes: true })
     return () => {
       off()
+      mo.disconnect()
+      clearTimeout(timer)
       detachFrame(el.contentWindow)
     }
   }, [])
 
-  // Theme, accent or mode changed: re-send the resolved tokens after the app repaints.
   useEffect(() => {
     const id = requestAnimationFrame(() => postLook())
     return () => cancelAnimationFrame(id)
-  }, [renderedMode, themeName, theme, accent])
+  }, [accent])
 
   const activeTab = tabs.find(t => t.path === active)
   const banner = active ? banners[active] : undefined
@@ -776,7 +800,33 @@ export function Dialogs() {
     <>
       <QuickOpen />
       <FolderDialog />
+      <BrowserDialog />
     </>
+  )
+}
+
+function BrowserDialog() {
+  const target = useValue($browserTarget)
+  const isUrl = !!target && /^[a-z][a-z0-9+.-]*:\/\//i.test(target) && !target.startsWith('file:')
+  const text = !target ? '' : isUrl ? `[${target}](${target})` : `MEDIA:${/\s/.test(target) ? `"${target}"` : target}`
+  return (
+    <Dialog open={!!target} onOpenChange={o => !o && $browserTarget.set(null)}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Open in Browser</DialogTitle>
+        </DialogHeader>
+        <div className="hi-qo" onClickCapture={e => (e.target as HTMLElement).closest('a,button') && setTimeout(() => $browserTarget.set(null), 1500)}>
+          <div style={{ fontSize: 12.5, color: 'var(--ui-text-secondary)' }}>
+            Click to render it in the Desktop Browser beside the chat. Use the Browser's Annotate tool to pick elements on the page and send them to this chat.
+          </div>
+          {/* the card resolves the target asynchronously and drops the open if it unmounts first */}
+          {target ? <MessageTextContent text={text} /> : null}
+          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+            <Button variant="ghost" onClick={() => { ctx.runAction?.('view.showBrowser'); $browserTarget.set(null) }}>Show Browser</Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -888,6 +938,11 @@ function FolderDialog() {
             <input type="checkbox" checked={apply} onChange={e => setApply(e.target.checked)} style={{ height: 'auto' }} />
             Also move this chat's working directory here, so Hermes works in the same folder
           </label>
+          {!host.state.focusedSessionId.get() ? (
+            <div style={{ fontSize: 12, color: 'var(--ui-text-tertiary)' }}>
+              This chat has not started yet. The folder is applied when its first reply finishes; to start a chat directly in a folder, use the composer's folder button.
+            </div>
+          ) : null}
           <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
             {useValue($rootPicked) ? <Button variant="ghost" onClick={() => { followSession(); $folderDialog.set(false) }}>Follow the chat's folder</Button> : null}
             <Button onClick={() => void submit()}>Open</Button>

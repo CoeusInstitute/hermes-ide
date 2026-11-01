@@ -120,6 +120,7 @@ let frameReady = false
 let queue: Array<[any, Transferable[] | undefined]> = []
 let fonts: Array<{ family: string; weight: string; style: string; buffer: ArrayBuffer }> | null = null
 let lookSource: (() => { vars: Record<string, string>; dark: boolean }) | null = null
+let lastLook = ''
 
 export function attachFrame(win: Window | null, look: () => { vars: Record<string, string>; dark: boolean }) {
   frameWin = win
@@ -147,7 +148,12 @@ export function postLook() {
     return
   }
   const s = $settings.get()
-  post({ type: 'look', ...lookSource(), fontSize: s.fontSize, wrap: s.wordWrap })
+  const look = { type: 'look', ...lookSource(), fontSize: s.fontSize, wrap: s.wordWrap }
+  const key = JSON.stringify(look)
+  if (key !== lastLook || !frameReady) {
+    lastLook = key
+    post(look)
+  }
 }
 
 /** The app's mono font files, read once from its own @font-face rules and handed to the frame
@@ -197,9 +203,11 @@ async function appFonts(): Promise<typeof fonts> {
 /** Rebuild the frame from plugin state: it may be a fresh document after a remount. */
 async function onFrameReady() {
   frameReady = true
+  lastLook = ''
   const pending = queue
   queue = []
   postLook()
+  setTimeout(postLook, 1500) // the app may still be applying its skin during startup
   for (const f of (await appFonts()) || []) {
     const buffer = f.buffer.slice(0)
     post({ type: 'font', family: f.family, weight: f.weight, style: f.style, buffer }, [buffer])
@@ -267,6 +275,7 @@ export function onFrameMessage(e: MessageEvent) {
 // ── tabs and files ───────────────────────────────────────────────────────────────────────────
 
 let closeEditor: (() => void) | null = null
+let disposing = false
 
 export function ensureEditor() {
   if (closeEditor || !renderEditor) {
@@ -284,11 +293,17 @@ export function ensureEditor() {
     onClose: () => {
       closeEditor = null
       detachFrame(frameWin)
+      if (!disposing) {
+        ctx.storage.set('editorOpen', false) // the user closed it; do not reopen on next launch
+      }
     }
   })
+  ctx.storage.set('editorOpen', true)
 }
 
+/** Plugin unload or reload: close the tile without recording it as the user's choice. */
 export function disposeEditor() {
+  disposing = true
   closeEditor?.()
   closeEditor = null
 }
@@ -663,14 +678,35 @@ function dropDraft(path: string) {
   }
 }
 
+let sessionLoaded = false
+
 export async function switchSession(next: string | null) {
   const key = next || 'draft'
-  if (key === sessionKey) {
+  if (key === sessionKey && sessionLoaded) {
     return
   }
-  persistTabs()
+  if (sessionLoaded) {
+    persistTabs()
+  }
+  // A folder opened in a draft chat follows that chat once it exists, and is applied to it as
+  // soon as its first turn ends (the gateway refuses to move a running session).
+  const draftRoot = sessionKey === 'draft' && key !== 'draft' ? (ctx.storage.get('root:draft', null) as string | null) : null
+  if (draftRoot) {
+    ctx.storage.set(`root:${key}`, draftRoot)
+    ctx.storage.remove('root:draft')
+    pendingCwd = { stored: key, cwd: draftRoot }
+  }
+  sessionLoaded = true
   sessionKey = key
-  const saved = ctx.storage.get(`tabs:${key}`, { paths: [], active: null }) as { paths: string[]; active: string | null }
+  const stored = ctx.storage.get(`tabs:${key}`, null) as { paths: string[]; active: string | null } | null
+  if (!stored) {
+    // A chat the IDE has not seen yet (a draft that just became a session, or an old chat):
+    // keep the editors that are open rather than blanking the IDE.
+    persistTabs()
+    await syncRoot()
+    return
+  }
+  const saved = stored
   const keepDirty = $tabs.get().filter(t => t.dirty)
   for (const t of $tabs.get()) {
     if (!t.dirty && !saved.paths.some(p => pathKey(p) === pathKey(t.path))) {
@@ -688,13 +724,29 @@ export async function switchSession(next: string | null) {
   $active.set(null)
   await syncRoot()
   const active = saved.active && tabs.some(t => pathKey(t.path) === pathKey(saved.active!)) ? saved.active : tabs[0]?.path
-  if (active) {
+  if (active && (closeEditor || ctx.storage.get('editorOpen', false))) {
     await openFile(active)
   }
 }
 
-export function sessionStorageKey() {
-  return sessionKey
+let pendingCwd: { stored: string; cwd: string } | null = null
+
+/** After a turn ends, move a just-created chat into the folder the IDE opened for it. */
+export async function applyPendingCwd() {
+  const p = pendingCwd
+  const sid = host.state.focusedSessionId.get()
+  if (!p || !sid || host.state.focusedStoredSessionId.get() !== p.stored) {
+    return
+  }
+  try {
+    await host.request('session.cwd.set', { session_id: sid, cwd: p.cwd })
+    pendingCwd = null
+    ctx.storage.remove(`root:${p.stored}`)
+    $rootPicked.set(false)
+    notify('info', `This chat now works in ${baseName(p.cwd)}.`)
+  } catch {
+    /* still busy: the next message.complete retries */
+  }
 }
 
 // ── chat wiring: the IDE never runs its own chat; it writes into the session's composer ─────
@@ -703,8 +755,16 @@ function focusedSession(): string | null {
   return host.state.focusedSessionId.get() || null
 }
 
+/** Refs are relative only when the IDE shows the chat's own folder; otherwise the agent would
+ *  resolve them against a different directory, so they stay absolute. */
+function chatRoot(): string | null {
+  const root = $root.get()
+  const cwd = host.state.cwd.get()
+  return root && cwd && pathKey(root) === pathKey(cwd) ? root : null
+}
+
 export async function addToChat(path: string, from?: number, to?: number, folder = false) {
-  const ref = fileRef(path, $root.get(), from, to, folder) + ' '
+  const ref = fileRef(path, chatRoot(), from, to, folder) + ' '
   const sid = focusedSession()
   let ok = await host.composer.insertText(sid, ref, { mode: 'inline' })
   if (!ok && sid) {
@@ -719,7 +779,7 @@ export async function addToChat(path: string, from?: number, to?: number, folder
 }
 
 export async function inlineEdit(path: string, from: number, to: number, instruction: string) {
-  const text = `In ${fileRef(path, $root.get(), from, to)}: ${instruction}`
+  const text = `In ${fileRef(path, chatRoot(), from, to)}: ${instruction}`
   const sid = focusedSession()
   if (host.composer.submit(sid, text)) {
     notify('info', 'Sent to Hermes. The edit will show here for review when it lands.')
@@ -733,18 +793,14 @@ export async function inlineEdit(path: string, from: number, to: number, instruc
   }
 }
 
-export async function openInBrowser(target: string) {
-  try {
-    const r = await call('/preview/open', { url: target, session_id: host.state.focusedSessionId.get() || '' })
-    if (r?.ok) {
-      return
-    }
-  } catch {
-    /* fall back to the plain Browser below */
-  }
-  ctx.runAction?.('view.showBrowser')
-  await ctx.os.writeClipboard(target)
-  notify('info', 'Browser opened. The address is on your clipboard.')
+export const $browserTarget = atom<string | null>(null)
+
+/** Show a file or URL in Desktop's own Browser (where Annotate picks elements for the chat).
+ *  shortcut: plugins have no door that opens a Browser tab directly, so the IDE shows the app's
+ *  own preview link (MessageTextContent) and the user's click opens it through core's handler.
+ *  Upgrade to host.openPreview(target) when the SDK ships one. */
+export function openInBrowser(target: string) {
+  $browserTarget.set(target)
 }
 
 // ── commands shared by the frame keymap, the palette and the UI ─────────────────────────────
@@ -763,6 +819,12 @@ export function showIde() {
   revealSidebar('explorer')
   ensureEditor()
   host.revealPane?.('terminal')
+  // Tabs restored from a previous launch load lazily; bring the active one up now.
+  const tabs = $tabs.get()
+  const want = $active.get() ?? tabs[0]?.path
+  if (want && !meta.has(pathKey(want))) {
+    activate(want)
+  }
 }
 
 export function runCommand(id: string) {

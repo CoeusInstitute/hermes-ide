@@ -25,6 +25,8 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
+# Routes are plain `def`: FastAPI runs them in its threadpool, so a long search or git call never
+# blocks the gateway event loop that every Desktop request shares.
 router = APIRouter()
 
 VERSION = "0.1.0"
@@ -313,48 +315,28 @@ def git_head_text(path: Path) -> dict[str, Any]:
         return {"text": None}
 
 
-# ── preview ─────────────────────────────────────────────────────────────────────────────────
-
-
-def open_preview(url: str, session_id: str, label: str = "") -> bool:
-    """Ask the desktop to show ``url`` (web URL, localhost dev server or file path) in its Browser.
-
-    shortcut: emits the same ``preview.open`` event the core ``desktop_preview`` tool emits, through
-    the gateway's installed desktop-UI emitter (a private name). Upgrade to a public SDK door
-    (``host.openPreview``) when Hermes ships one."""
-    try:
-        from tools import desktop_ui
-    except Exception:
-        return False
-    emitter = getattr(desktop_ui, "_emit", None)
-    if emitter is None:
-        return False
-    emitter(session_id or "", "preview.open", {"url": url, "label": label})
-    return True
-
-
 # ── routes ──────────────────────────────────────────────────────────────────────────────────
 
 
 @router.post("/health")
-async def health(body: dict | None = None) -> dict:
+def health(body: dict | None = None) -> dict:
     return {"ok": True, "version": VERSION, "rg": bool(shutil.which("rg")), "git": bool(shutil.which("git")),
             "home": os.path.expanduser("~").replace("\\", "/"), "platform": sys.platform}
 
 
 @router.post("/fs/list")
-async def fs_list(body: dict) -> dict:
+def fs_list(body: dict) -> dict:
     b = _body(body)
     return list_dir(resolve_path(b.get("path")), bool(b.get("show_hidden", True)))
 
 
 @router.post("/fs/read")
-async def fs_read(body: dict) -> dict:
+def fs_read(body: dict) -> dict:
     return read_file(resolve_path(_body(body).get("path")))
 
 
 @router.post("/fs/stat")
-async def fs_stat(body: dict) -> dict:
+def fs_stat(body: dict) -> dict:
     p = resolve_path(_body(body).get("path"), must_exist=False)
     if not p.exists():
         return {"path": _posix(p), "exists": False}
@@ -362,7 +344,7 @@ async def fs_stat(body: dict) -> dict:
 
 
 @router.post("/fs/write")
-async def fs_write(body: dict) -> dict:
+def fs_write(body: dict) -> dict:
     b = _body(body)
     text = b.get("text")
     if not isinstance(text, str):
@@ -373,7 +355,7 @@ async def fs_write(body: dict) -> dict:
 
 
 @router.post("/fs/create")
-async def fs_create(body: dict) -> dict:
+def fs_create(body: dict) -> dict:
     b = _body(body)
     p = resolve_path(b.get("path"), must_exist=False)
     if p.exists():
@@ -389,7 +371,7 @@ async def fs_create(body: dict) -> dict:
 
 
 @router.post("/fs/rename")
-async def fs_rename(body: dict) -> dict:
+def fs_rename(body: dict) -> dict:
     b = _body(body)
     src = resolve_path(b.get("from"))
     dst = resolve_path(b.get("to"), must_exist=False)
@@ -402,19 +384,19 @@ async def fs_rename(body: dict) -> dict:
 
 
 @router.post("/fs/trash")
-async def fs_trash(body: dict) -> dict:
+def fs_trash(body: dict) -> dict:
     p = resolve_path(_body(body).get("path"))
     trash(p)
     return {"ok": True}
 
 
 @router.post("/fs/files")
-async def fs_files(body: dict) -> dict:
+def fs_files(body: dict) -> dict:
     return list_files(resolve_path(_body(body).get("root")))
 
 
 @router.post("/search")
-async def fs_search(body: dict) -> dict:
+def fs_search(body: dict) -> dict:
     b = _body(body)
     q = b.get("query")
     if not isinstance(q, str):
@@ -429,19 +411,10 @@ async def fs_search(body: dict) -> dict:
 
 
 @router.post("/git/status")
-async def route_git_status(body: dict) -> dict:
+def route_git_status(body: dict) -> dict:
     return git_status(resolve_path(_body(body).get("root")))
 
 
 @router.post("/git/head")
-async def route_git_head(body: dict) -> dict:
+def route_git_head(body: dict) -> dict:
     return git_head_text(resolve_path(_body(body).get("path")))
-
-
-@router.post("/preview/open")
-async def route_preview_open(body: dict) -> dict:
-    b = _body(body)
-    url = b.get("url")
-    if not isinstance(url, str) or not url.strip():
-        raise HTTPException(400, "url required")
-    return {"ok": open_preview(url.strip(), str(b.get("session_id") or ""), str(b.get("label") or ""))}
