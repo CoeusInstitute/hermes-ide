@@ -80,7 +80,10 @@ export interface GitState {
   repo: boolean
   root?: string
   branch?: string
+  /** pathKey → status code (M, A, D, ?, U, R) */
   files: Record<string, string>
+  /** pathKey → the path as git reported it (original case, for display and opening) */
+  paths?: Record<string, string>
 }
 
 export const $root = atom<string | null>(null)
@@ -641,10 +644,12 @@ export async function refreshGit() {
   try {
     const st = await call<GitState>('/git/status', { root })
     const files: Record<string, string> = {}
+    const paths: Record<string, string> = {}
     for (const [p, code] of Object.entries(st.files || {})) {
       files[pathKey(p)] = code
+      paths[pathKey(p)] = p
     }
-    $git.set({ ...st, files })
+    $git.set({ ...st, files, paths })
   } catch {
     $git.set({ repo: false, files: {} })
   }
@@ -667,7 +672,11 @@ function persistDrafts() {
       out[k] = m.draft
     }
   }
-  ctx.storage.set('drafts', out)
+  try {
+    ctx.storage.set('drafts', out)
+  } catch {
+    // Storage full: the open editor still holds the text; only crash recovery is lost.
+  }
 }
 
 function dropDraft(path: string) {

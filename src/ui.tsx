@@ -604,7 +604,7 @@ function ScmView({ root }: { root: string }) {
       <div className="hi-scroll">
         {files.length === 0 ? <div className="hi-empty">No changes.</div> : null}
         {files.map(([key, code]) => {
-          const path = (git.root || root) + key.slice(pathKey(git.root || root).length)
+          const path = git.paths?.[key] ?? key
           return (
             <div key={key} className="hi-row" style={{ paddingLeft: 10 }} title={`${GIT_LABEL[code] || code}: ${path}`} onClick={() => void openDiff(path, code)}>
               {icon(fileIcon(path))}
@@ -674,7 +674,8 @@ export function EditorPane() {
     attachFrame(el.contentWindow, () => readLook(el.parentElement || el))
     const off = ctx.addEventListener(window, 'message', onFrameMessage as EventListener)
     // Skins, light/dark and accent repaint by rewriting :root attributes and inline tokens, often
-    // in several passes; wait for the writes to settle before reading the resolved tokens.
+    // in several passes; wait for the writes to settle before reading the resolved tokens. Computed
+    // tokens are the source of truth because a skin can keep a bright surface in "dark" mode.
     let timer = 0
     const repaint = () => {
       clearTimeout(timer)

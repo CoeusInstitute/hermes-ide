@@ -429,10 +429,10 @@ async function refreshGit() {
     return;
   }
   try {
-    let st = await call("/git/status", { root }), files = {};
+    let st = await call("/git/status", { root }), files = {}, paths = {};
     for (let [p, code] of Object.entries(st.files || {}))
-      files[pathKey(p)] = code;
-    $git.set({ ...st, files });
+      files[pathKey(p)] = code, paths[pathKey(p)] = p;
+    $git.set({ ...st, files, paths });
   } catch {
     $git.set({ repo: !1, files: {} });
   }
@@ -447,7 +447,10 @@ function persistDrafts() {
   let out = {};
   for (let [k, m] of meta)
     m.draft != null && m.draft.length < 1e6 && (out[k] = m.draft);
-  ctx.storage.set("drafts", out);
+  try {
+    ctx.storage.set("drafts", out);
+  } catch {
+  }
 }
 function dropDraft(path) {
   let d = drafts();
@@ -1042,7 +1045,7 @@ function ScmView({ root }) {
     /* @__PURE__ */ jsxs("div", { className: "hi-scroll", children: [
       files.length === 0 ? /* @__PURE__ */ jsx("div", { className: "hi-empty", children: "No changes." }) : null,
       files.map(([key, code]) => {
-        let path = (git.root || root) + key.slice(pathKey(git.root || root).length);
+        let path = git.paths?.[key] ?? key;
         return /* @__PURE__ */ jsxs("div", { className: "hi-row", style: { paddingLeft: 10 }, title: `${GIT_LABEL[code] || code}: ${path}`, onClick: () => void openDiff(path, code), children: [
           icon(fileIcon(path)),
           /* @__PURE__ */ jsxs("span", { className: "hi-name", "data-c": code, children: [
