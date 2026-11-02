@@ -15,13 +15,22 @@ import {
   DialogHeader,
   DialogTitle,
   host,
+  MessageTextContent,
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
   SegmentedControl,
   ToggleRow,
   useValue
 } from '@hermes/plugin-sdk'
-import { createElement, Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 
 import FRAME_HTML from 'virtual:frame-html'
+
+import { type EditorFrame, mountEditor } from './frame/editor'
+import { FullBrowserTile } from './full/browser-tile'
+import { useIdeRowClick } from './full/row-click'
+import { $sessionRows, age, durable, ideRows, startNewIdeChat } from './ide-chats'
 
 import {
   $askTrust,
@@ -30,10 +39,13 @@ import {
   $picking,
   $selected,
   $server,
+  $trusted,
   type Candidate,
   detectProject,
   pickElement,
+  reloadPreview,
   restartUi,
+  revokeTrust,
   servedUrl,
   startUi,
   stopUi,
@@ -59,6 +71,9 @@ import {
   $view,
   $ideChats,
   $openTiles,
+  $explorerPanel,
+  $runAttention,
+  $pagePending,
   IDE_WINDOW,
   activate,
   addToChat,
@@ -76,6 +91,7 @@ import {
   openFile,
   openIdeWindow,
   openInBrowser,
+  openTile,
   post,
   postLook,
   refreshGit,
@@ -86,9 +102,12 @@ import {
   setSetting,
   syncRoot,
   toggleTile,
-  undoAgentEdit
+  trashedOnDisk,
+  movedOnDisk,
+  undoAgentEdit,
+  unmarkIdeChat
 } from './core'
-import { addressToUrl, baseName, dirName, joinPath, pathKey, rankFiles, splitLineSuffix, type TileId } from './util'
+import { baseName, dirName, joinPath, pathKey, rankFiles, splitLineSuffix, type TileId } from './util'
 
 // ── styles (scoped by the hi- prefix; theme tokens only, never literal colors) ──────────────
 
@@ -124,7 +143,7 @@ const STYLES = `
 .hi-tab[data-active=true]::after{content:"";position:absolute;left:0;right:0;top:0;height:1.5px;background:var(--ui-accent)}
 .hi-tab[data-preview=true] .hi-tabname{font-style:italic}
 .hi-tab .hi-x{width:18px;height:18px;min-width:18px;visibility:hidden}
-.hi-tab:hover .hi-x,.hi-tab[data-active=true] .hi-x{visibility:visible}
+.hi-tab:hover .hi-x,.hi-tab:focus-within .hi-x,.hi-tab[data-active=true] .hi-x{visibility:visible}
 .hi-dot{width:8px;height:8px;border-radius:50%;background:var(--ui-text-secondary);margin:0 5px}
 .hi-tab[data-dirty=true]:hover .hi-dot{display:none}
 .hi-tab[data-dirty=true]:not(:hover) .hi-x{display:none}
@@ -170,6 +189,41 @@ const STYLES = `
 .hi-toggle{position:relative}
 .hi-open-ide{display:inline-flex;align-items:center;gap:4px;height:18px;padding:0 6px;border:0;border-radius:4px;background:none;color:var(--ui-text-tertiary);font:inherit;font-size:.6875rem;cursor:pointer}
 .hi-open-ide:hover{background:var(--ui-control-hover-background);color:var(--ui-text-primary)}
+.hi-open-wrap{display:inline-flex;align-items:center}
+.hi-wb{display:flex;width:100%;height:100%;min-height:0}
+.hi-wb-side{flex:none;min-width:0;height:100%}
+.hi-wb-side>.hi-tile,.hi-wb-main>.hi-tile{width:100%;height:100%}
+.hi-wb-main{flex:1;min-width:0;height:100%;display:flex;border-left:1px solid color-mix(in srgb,var(--ui-base) 18%,transparent)}
+.hi-wb-sash{flex:none;width:6px;margin:0 -3px 0 -3px;position:relative;z-index:2;cursor:col-resize;outline:none}
+.hi-wb-sash:hover,.hi-wb-sash:focus-visible,.hi-wb-sash:active{background:linear-gradient(to right,transparent 2px,var(--ui-accent) 2px,var(--ui-accent) 4px,transparent 4px)}
+.hi-open-more{display:inline-grid;place-items:center;width:16px;height:18px;margin-left:-3px;border:0;border-radius:4px;background:none;color:var(--ui-text-quaternary);cursor:pointer}
+.hi-open-more:hover,.hi-open-more[data-state=open]{background:var(--ui-control-hover-background);color:var(--ui-text-primary)}
+.hi-chats{display:flex;flex-direction:column;min-width:280px;max-width:380px;max-height:420px;padding:4px;font-size:12.5px;color:var(--ui-text-primary)}
+.hi-chats-head{display:flex;align-items:center;gap:8px;padding:6px 8px 4px;font-size:.64rem;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--ui-text-quaternary)}
+.hi-chats-list{overflow-y:auto;min-height:0}
+.hi-chat{display:flex;align-items:center;gap:8px;width:100%;padding:5px 8px;border:0;border-radius:6px;background:none;color:inherit;font:inherit;text-align:left;cursor:pointer}
+.hi-chat:hover,.hi-chat:focus-visible{background:var(--ui-row-hover-background);outline:none}
+.hi-chat-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hi-chat-age{flex:none;font-size:11px;color:var(--ui-text-tertiary)}
+.hi-chat-x{display:none;place-items:center;width:18px;height:18px;border-radius:4px;color:var(--ui-text-tertiary)}
+.hi-chat:hover .hi-chat-x,.hi-chat:focus-visible .hi-chat-x{display:grid}
+.hi-chat:hover .hi-chat-age{display:none}
+.hi-chat-x:hover{background:var(--ui-control-hover-background);color:var(--ui-text-primary)}
+.hi-chats-empty{padding:4px 8px 8px;color:var(--ui-text-tertiary);font-size:12px}
+.hi-chats-sep{height:1px;margin:4px 6px;background:var(--ui-stroke-tertiary)}
+.hi-ide-badge{display:inline-flex;align-items:center;height:14px;padding:0 4px;margin:0 3px 0 1px;border-radius:4px;font-size:9px;font-weight:700;letter-spacing:.05em;line-height:1;color:var(--ui-accent);background:color-mix(in srgb,var(--ui-accent) 16%,transparent);flex:none;align-self:center;cursor:pointer}
+.hi-ide-badge:hover{background:color-mix(in srgb,var(--ui-accent) 28%,transparent)}
+.hi-bname{display:inline-flex;align-items:center;gap:6px;padding:0 4px;font-size:12px;color:var(--ui-text-secondary)}
+.hi-open-page{display:flex;flex-direction:column;align-items:center;gap:8px;font-size:13px}
+.hi-open-page .hi-dim{max-width:340px;font-size:11.5px}
+.hi-run{display:flex;flex-direction:column;flex:1;min-height:0;font-size:12px}
+.hi-run-tools{display:flex;align-items:center;gap:2px;height:var(--hi-sub,28px);box-sizing:border-box;padding:0 6px 0 12px;flex:none;border-bottom:1px solid var(--hi-divider)}
+.hi-run .hi-bsub{padding:4px 8px}
+.hi-run-body{position:relative;flex:1;min-height:120px}
+.hi-run .hi-open-page{padding:18px 14px;text-align:center}
+.hi-run .hi-log{max-height:45%}
+.hi-run-dot{position:absolute;top:3px;right:2px;width:6px;height:6px;border-radius:50%;background:var(--ui-accent)}
+.hi-run-dot[data-s=ready]{background:var(--ui-green)} .hi-run-dot[data-s=starting],.hi-run-dot[data-s=installing]{background:var(--ui-yellow)}
 .hi-card:hover{background:var(--ui-row-hover-background)}
 `
 
@@ -177,7 +231,7 @@ export function Styles() {
   return <style>{STYLES}</style>
 }
 
-const icon = (name: string, size = 14) => <Codicon name={name} size={size} />
+export const icon = (name: string, size = 14) => <Codicon name={name} size={size} />
 
 function fileIcon(name: string) {
   if (/\.(png|jpe?g|gif|svg|webp|ico|bmp)$/i.test(name)) return 'file-media'
@@ -205,6 +259,7 @@ export function Sidebar() {
         <ViewTab current={view} id="explorer" icon="files" label="Explorer" />
         <ViewTab current={view} id="search" icon="search" label="Search" />
         <ViewTab current={view} id="scm" icon="source-control" label={`Source Control${changes ? ` (${changes})` : ''}`} badge={changes} />
+        {__CATALOG__ ? <RunViewTab current={view} /> : null}
         <span style={{ flex: 1 }} />
         <button className="hi-btn" onClick={() => $quickOpen.set(true)} title="Quick Open (Ctrl+P in the editor)">
           {icon('go-to-file')}
@@ -228,10 +283,24 @@ export function Sidebar() {
         <Explorer root={root} />
       ) : view === 'search' ? (
         <SearchView root={root} />
+      ) : view === 'run' && __CATALOG__ ? (
+        <RunPanel />
       ) : (
         <ScmView root={root} />
       )}
     </div>
+  )
+}
+
+function RunViewTab({ current }: { current: string }) {
+  const attention = useValue($runAttention)
+  const server = useValue($server)
+  const live = server && server.state !== 'exited'
+  return (
+    <button className="hi-btn" data-on={current === 'run'} onClick={() => openTile('browser')} title="Project UI" aria-label="Project UI" style={{ position: 'relative' }}>
+      {icon('play-circle', 15)}
+      {attention || live ? <span className="hi-run-dot" data-s={live ? server!.state : 'found'} /> : null}
+    </button>
   )
 }
 
@@ -343,16 +412,15 @@ function Explorer({ root }: { root: string }) {
     setEditing(null)
     const name = value.trim()
     if (!e || !name) return
+    if (/[\\/]/.test(name) || name === '.' || name === '..') {
+      notify('error', 'A name cannot contain / or \\, or be . or ..')
+      return
+    }
     try {
       if (e.kind === 'rename') {
         if (name === baseName(e.path)) return
-        const to = joinPath(e.dir, name)
-        await call('/fs/rename', { from: e.path, to })
-        const tab = $tabs.get().find(t => pathKey(t.path) === pathKey(e.path))
-        if (tab) {
-          closeTab(tab.path, true)
-          void openFile(to)
-        }
+        const r = await call<{ path: string }>('/fs/rename', { from: e.path, to: joinPath(e.dir, name) })
+        movedOnDisk(e.path, r.path) // its tabs follow, unsaved edits included
       } else {
         const path = joinPath(e.dir, name)
         await call('/fs/create', { path, dir: e.kind === 'folder' })
@@ -374,8 +442,13 @@ function Explorer({ root }: { root: string }) {
   const doTrash = async () => {
     const p = trashTarget
     if (!p) return
-    await call('/fs/trash', { path: p })
-    for (const t of $tabs.get()) if (pathKey(t.path).startsWith(pathKey(p))) closeTab(t.path, true)
+    try {
+      await call('/fs/trash', { path: p })
+    } catch (err) {
+      notify('error', `Could not move ${baseName(p)} to the trash: ${(err as Error).message}`)
+      return
+    }
+    trashedOnDisk(p)
     bumpTree()
     void refreshGit()
   }
@@ -728,6 +801,66 @@ export function EditorTile() {
   )
 }
 
+/** Catalog build's Editor column: the Explorer as a resizable panel beside the editor (one column,
+ *  so its width is the plugin's to keep; see $explorerPanel). Both stay mounted while the panel is
+ *  hidden, so the editor frame never reloads and keeps its undo history. */
+export function Workbench() {
+  const panel = useValue($explorerPanel)
+  const [w, setW] = useState(() => clampSide(Number(ctx.storage.get('explorerWidth', 300))))
+  const width = useRef(w)
+  const startDrag = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault()
+    const x0 = e.clientX
+    const w0 = width.current
+    const sash = e.currentTarget
+    sash.setPointerCapture(e.pointerId)
+    const move = (ev: PointerEvent) => {
+      width.current = clampSide(w0 + ev.clientX - x0)
+      setW(width.current)
+    }
+    const up = () => {
+      sash.removeEventListener('pointermove', move)
+      sash.removeEventListener('pointerup', up)
+      ctx.storage.set('explorerWidth', width.current)
+    }
+    sash.addEventListener('pointermove', move)
+    sash.addEventListener('pointerup', up)
+  }
+  const nudge = (e: React.KeyboardEvent) => {
+    const d = e.key === 'ArrowLeft' ? -16 : e.key === 'ArrowRight' ? 16 : 0
+    if (!d) return
+    e.preventDefault()
+    width.current = clampSide(width.current + d)
+    setW(width.current)
+    ctx.storage.set('explorerWidth', width.current)
+  }
+  return (
+    <div className="hi-wb">
+      <Styles />
+      <div className="hi-wb-side" style={{ display: panel ? 'flex' : 'none', width: w }}>
+        <ExplorerTile />
+      </div>
+      <div
+        className="hi-wb-sash"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize the Explorer"
+        aria-valuenow={w}
+        tabIndex={panel ? 0 : -1}
+        style={{ display: panel ? undefined : 'none' }}
+        onPointerDown={startDrag}
+        onKeyDown={nudge}
+        onDoubleClick={() => { width.current = 300; setW(300); ctx.storage.set('explorerWidth', 300) }}
+      />
+      <div className="hi-wb-main">
+        <EditorTile />
+      </div>
+    </div>
+  )
+}
+
+const clampSide = (n: number) => Math.min(640, Math.max(180, Number.isFinite(n) ? Math.round(n) : 300))
+
 export function EditorPane() {
   const tabs = useValue($tabs)
   const active = useValue($active)
@@ -735,12 +868,33 @@ export function EditorPane() {
   const confirmClose = useValue($confirmClose)
   const accent = useValue($accentOverride)
   const frameRef = useRef<HTMLIFrameElement>(null)
+  const editorRef = useRef<EditorFrame | null>(null)
+
+  // The frame's document is new on every load (the app re-parents a tile when it is dragged, which
+  // reloads an iframe), so mount the editor on each load and drop the one bound to the old document.
+  const onFrameLoad = useCallback(() => {
+    const el = frameRef.current
+    const win = el?.contentWindow
+    if (!el || !win || !win.document.getElementById('editor')) return
+    const old = editorRef.current
+    detachFrame(old)
+    try {
+      old?.destroy()
+    } catch {
+      /* its document is already gone */
+    }
+    let f: EditorFrame | null = null
+    const send = (m: any) => queueMicrotask(() => f && onFrameMessage(f, m))
+    f = mountEditor(win, send)
+    editorRef.current = f
+    attachFrame(f, () => readLook(el.parentElement || el))
+  }, [])
 
   useEffect(() => {
     const el = frameRef.current
     if (!el) return
-    attachFrame(el.contentWindow, () => readLook(el.parentElement || el))
-    const off = ctx.addEventListener(window, 'message', onFrameMessage as EventListener)
+    // A srcdoc that finished loading before React attached onLoad.
+    if (el.contentDocument?.readyState === 'complete') onFrameLoad()
     // Skins, light/dark and accent repaint by rewriting :root attributes and inline tokens, often
     // in several passes; wait for the writes to settle before reading the resolved tokens. Computed
     // tokens are the source of truth because a skin can keep a bright surface in "dark" mode.
@@ -753,12 +907,18 @@ export function EditorPane() {
     mo.observe(document.documentElement, { attributes: true })
     mo.observe(document.body, { attributes: true })
     return () => {
-      off()
       mo.disconnect()
       clearTimeout(timer)
-      detachFrame(el.contentWindow)
+      const f = editorRef.current
+      editorRef.current = null
+      detachFrame(f)
+      try {
+        f?.destroy()
+      } catch {
+        /* its document is already gone */
+      }
     }
-  }, [])
+  }, [onFrameLoad])
 
   useEffect(() => {
     const id = requestAnimationFrame(() => postLook())
@@ -822,7 +982,7 @@ export function EditorPane() {
         </div>
       ) : null}
       {banner && active ? <ReviewBanner path={active} banner={banner} /> : null}
-      <iframe ref={frameRef} className="hi-frame" title="Hermes IDE editor" sandbox="allow-scripts" srcDoc={FRAME_HTML} />
+      <iframe ref={frameRef} className="hi-frame" title="Hermes IDE editor" srcDoc={FRAME_HTML} onLoad={onFrameLoad} />
       <ConfirmDialog
         open={!!confirmClose}
         onClose={() => $confirmClose.set(null)}
@@ -864,192 +1024,160 @@ function ReviewBanner({ path, banner }: { path: string; banner: NonNullable<Retu
 
 // ── Browser column: the project's UI (run by the IDE) or any page, with an element picker ────
 
-/** The page itself. Electron throws (synchronously) when a webview method runs before the guest
- *  is attached and has emitted dom-ready, so navigations wait for it and the toolbar goes through
- *  `guest()`, which returns null until then. */
-function Webview({ nav, onNav, onRef }: { nav: { url: string; at: number }; onNav: (u: string) => void; onRef: (el: any) => void }) {
-  const ref = useRef<any>(null)
-  const ready = useRef(false)
-  const pending = useRef<string | null>(null)
-  const [initial] = useState(nav.url) // later navigations go through loadURL: re-setting src would reload
-  const [fail, setFail] = useState<string | null>(null)
-  useEffect(() => {
-    const el = ref.current
-    if (!el) return
-    const domReady = () => {
-      ready.current = true
-      onRef(el)
-      const u = pending.current
-      pending.current = null
-      if (u) el.loadURL(u).catch(() => undefined)
-    }
-    const navigated = (e: any) => {
-      if (e.isMainFrame === false) return
-      setFail(null)
-      onNav(e.url)
-    }
-    const failed = (e: any) => {
-      if (e.isMainFrame && e.errorCode !== -3) setFail(`${e.errorDescription || 'Load failed'} (${e.validatedURL})`)
-    }
-    el.addEventListener('dom-ready', domReady)
-    el.addEventListener('did-navigate', navigated)
-    el.addEventListener('did-navigate-in-page', navigated)
-    el.addEventListener('did-fail-load', failed)
-    // A fast (cached, local) page can be ready before this effect ran; a method only works then.
-    try {
-      el.getURL()
-      domReady()
-    } catch {
-      /* not ready yet: dom-ready will come */
-    }
-    return () => {
-      el.removeEventListener('dom-ready', domReady)
-      el.removeEventListener('did-navigate', navigated)
-      el.removeEventListener('did-navigate-in-page', navigated)
-      el.removeEventListener('did-fail-load', failed)
-      ready.current = false
-      onRef(null)
-    }
-  }, [])
-  useEffect(() => {
-    if (nav.url === initial && !ready.current) return // the first page loads from src
-    if (ready.current) ref.current?.loadURL(nav.url).catch(() => undefined)
-    else pending.current = nav.url
-  }, [nav.at])
-  return (
-    <>
-      {createElement('webview', { ref, src: initial, partition: 'persist:hermes-ide', webpreferences: 'contextIsolation=yes' })}
-      {fail ? (
-        <div className="hi-bempty">
-          <div>
-            {fail}
-            <div style={{ marginTop: 10 }}>
-              <Button size="sm" variant="secondary" onClick={() => { setFail(null); if (ready.current) ref.current?.reload() }}>Retry</Button>
-            </div>
-          </div>
-        </div>
-      ) : null}
-    </>
-  )
-}
-
-export function BrowserTile() {
-  const nav = useValue($browserNav)
+/** The project's UI: what was found, its state, and Run / Restart / Stop (both builds' columns). */
+export function ProjectBar({ showLog, onToggleLog }: { showLog: boolean; onToggleLog: () => void }) {
   const server = useValue($server)
   const candidates = useValue($candidates)
   const selectedId = useValue($selected)
-  const ask = useValue($askTrust)
-  const picking = useValue($picking)
+  const cand = candidates.find(c => c.id === selectedId) ?? null
+  const state = server?.state
+  if (!cand && !server) return null
+  return (
+    <div className="hi-bsub">
+      <button className="hi-pill" title={`${server ? `${server.command} · ${state}` : cand?.command}. ${showLog ? 'Hide' : 'Show'} its output.`} aria-pressed={showLog} onClick={onToggleLog}>
+        <span className="hi-led" data-s={state ?? 'idle'} />
+        <span>{cand?.framework ?? server?.framework}{cand?.rel ? ` · ${cand.rel}` : ''}</span>
+        <span className="hi-dim">{state === 'ready' ? 'running' : state === 'exited' ? (server?.exit_code ? `exited (${server.exit_code})` : 'stopped') : state ?? 'not running'}</span>
+      </button>
+      {candidates.length > 1 ? (
+        <select
+          className="hi-pill"
+          value={selectedId ?? ''}
+          title="Which UI to run"
+          onChange={e => $selected.set(e.target.value)}
+          style={{ background: 'none', border: '1px solid var(--hi-divider)' }}
+        >
+          {candidates.map(c => <option key={c.id} value={c.id}>{c.rel || c.name} ({c.framework})</option>)}
+        </select>
+      ) : null}
+      <span className="hi-spacer" />
+      {state === 'ready' || state === 'starting' || state === 'installing' ? (
+        <>
+          <button className="hi-pill" onClick={() => void restartUi()}>{icon('debug-restart', 13)} Restart</button>
+          <button className="hi-pill" onClick={() => void stopUi()}>{icon('debug-stop', 13)} Stop</button>
+        </>
+      ) : cand ? (
+        <button className="hi-pill" title={`Run ${cand.command} once (the banner's "Always run" makes it start with the IDE)`} onClick={() => void startUi()}>{icon('play', 13)} {cand.installed ? 'Run' : 'Install & run'}</button>
+      ) : null}
+    </div>
+  )
+}
+
+/** The gateway still serves the plugin's previous backend (an update's Python loads on restart). */
+export function StaleBanner() {
   const stale = useValue($backendStale)
+  if (!stale) return null
+  return (
+    <div className="hi-banner">
+      {icon('warning')}
+      <span>
+        The IDE was updated, but the gateway still runs its previous backend, so project detection and dev servers are off. Run <code>hermes gateway restart</code> (or restart Hermes), then reopen this window.
+      </span>
+    </div>
+  )
+}
+
+/** What the column says while there is no page: installing, starting, found, or nothing found. */
+export function ProjectEmpty({ fallback }: { fallback: string }) {
+  const server = useValue($server)
+  const candidates = useValue($candidates)
+  const selectedId = useValue($selected)
   const root = useValue($root)
-  const [url, setUrl] = useState(nav?.url ?? '')
-  const [input, setInput] = useState(nav?.url ?? '')
-  const [showLog, setShowLog] = useState(false)
-  const view = useRef<any>(null) // set once the page is ready for method calls
-  const guest = () => view.current
-  const isWebview = !!(window as any).hermesDesktop // Electron only; a browser-hosted Desktop has no webview tag
-
-  // A navigation request (the dev server came up, Open in Browser, the agent's ide_open).
-  useEffect(() => {
-    if (!nav) return
-    setInput(nav.url)
-    if (!url) setUrl(nav.url)
-  }, [nav?.at])
-
-  const go = (raw: string) => {
-    const target = addressToUrl(raw)
-    if (target) $browserNav.set({ url: target, at: Date.now() })
-  }
-
   const cand = candidates.find(c => c.id === selectedId) ?? null
   const state = server?.state
   return (
-    <div className="hi-tile" data-tile="browser">
-      <Styles />
-      <div className="hi-bbar">
-        <button className="hi-btn" title="Back" disabled={!url} onClick={() => guest()?.goBack()}>{icon('arrow-left')}</button>
-        <button className="hi-btn" title="Forward" disabled={!url} onClick={() => guest()?.goForward()}>{icon('arrow-right')}</button>
-        <button className="hi-btn" title="Reload" disabled={!url} onClick={() => guest()?.reload()}>{icon('refresh')}</button>
-        <input
-          className="hi-url"
-          value={input}
-          placeholder={cand ? `Run ${cand.framework} or type an address` : 'Type an address, e.g. localhost:3000'}
-          spellCheck={false}
-          onChange={e => setInput(e.target.value)}
-          onKeyDown={e => { if (e.key === 'Enter') go(input); e.stopPropagation() }}
-        />
-        <button className="hi-btn" data-on={picking} title="Pick an element and send it to the chat" disabled={!url} onClick={() => void pickElement(guest())}>{icon('inspect')}</button>
-        <button className="hi-btn" title="Page DevTools" disabled={!url} onClick={() => guest()?.openDevTools()}>{icon('debug-console')}</button>
-        <button className="hi-btn" title="Open in your browser" disabled={!url} onClick={() => void ctx.os.openExternal?.(url)}>{icon('link-external')}</button>
-      </div>
-      {cand || server ? (
-        <div className="hi-bsub">
-          <button className="hi-pill" title={server ? `${server.command} · ${state}` : cand?.command} onClick={() => setShowLog(!showLog)}>
-            <span className="hi-led" data-s={state ?? 'idle'} />
-            <span>{cand?.framework ?? server?.framework}{cand?.rel ? ` · ${cand.rel}` : ''}</span>
-            <span className="hi-dim">{state === 'ready' ? 'running' : state === 'exited' ? (server?.exit_code ? `exited (${server.exit_code})` : 'stopped') : state ?? 'not running'}</span>
-          </button>
-          {candidates.length > 1 ? (
-            <select
-              className="hi-pill"
-              value={selectedId ?? ''}
-              title="Which UI to run"
-              onChange={e => $selected.set(e.target.value)}
-              style={{ background: 'none', border: '1px solid var(--hi-divider)' }}
-            >
-              {candidates.map(c => <option key={c.id} value={c.id}>{c.rel || c.name} ({c.framework})</option>)}
-            </select>
-          ) : null}
-          <span className="hi-spacer" />
-          {state === 'ready' || state === 'starting' || state === 'installing' ? (
-            <>
-              <button className="hi-pill" onClick={() => void restartUi()}>{icon('debug-restart', 13)} Restart</button>
-              <button className="hi-pill" onClick={() => void stopUi()}>{icon('debug-stop', 13)} Stop</button>
-            </>
-          ) : cand ? (
-            <button className="hi-pill" onClick={() => { trust(cand); void startUi() }}>{icon('play', 13)} {cand.installed ? 'Run' : 'Install & run'}</button>
-          ) : null}
-        </div>
-      ) : null}
-      {ask ? <TrustBanner cand={ask} /> : null}
-      {stale ? (
-        <div className="hi-banner">
-          {icon('warning')}
-          <span>
-            The IDE was updated, but the gateway still runs its previous backend, so project detection and dev servers are off. Run <code>hermes gateway restart</code> (or restart Hermes), then reopen this window.
-          </span>
-        </div>
-      ) : null}
-      {showLog && server ? <pre className="hi-log">{server.log.join('\n') || 'No output yet.'}</pre> : null}
-      <div className="hi-web">
-        {!isWebview ? (
-          <div className="hi-bempty">The Browser column needs the Hermes Desktop app.</div>
-        ) : url ? (
-          <Webview key={root ?? ''} nav={nav && nav.url ? nav : { url, at: 0 }} onRef={el => (view.current = el)} onNav={u => { setInput(u); setUrl(u) }} />
-        ) : (
-          <div className="hi-bempty">
-            <div>
-              {state === 'installing' ? 'Installing dependencies…' : state === 'starting' ? `Starting ${server?.framework}… the page opens when it is up.` : candidates.length ? `${cand?.framework} app found${cand?.rel ? ` in ${cand.rel}` : ''}.` : 'No page yet. Type an address above.'}
-              {!server && root && !candidates.length ? (
-                <div style={{ marginTop: 10 }}>
-                  <Button size="sm" variant="ghost" onClick={() => void detectProject(true)}>Look for a UI in this folder again</Button>
-                </div>
-              ) : null}
-            </div>
+    <div className="hi-bempty">
+      <div>
+        {state === 'installing' ? 'Installing dependencies…' : state === 'starting' ? `Starting ${server?.framework}…` : state === 'exited' ? `${server?.framework} stopped${server?.exit_code ? ` (exit code ${server.exit_code}); its output is above` : ''}.` : candidates.length ? `${cand?.kind === 'static' ? 'Static site' : `${cand?.framework} app`} found${cand?.rel ? ` in ${cand.rel}` : ''}.` : fallback}
+        {!server && root && !candidates.length ? (
+          <div style={{ marginTop: 10 }}>
+            <Button size="sm" variant="ghost" onClick={() => void detectProject(true)}>Look for a UI in this folder again</Button>
           </div>
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
+/** Catalog build: the project's UI runs here and shows in the app's own Browser pane. The plugin
+ *  SDK can run a script in that Browser (with the user's consent per site) but cannot point it at
+ *  an address, so the page opens from a link: a click opens it in the Browser (Ctrl+click, your
+ *  system browser), through the app's own link handling. */
+function RunPanel() {
+  const server = useValue($server)
+  const pending = useValue($pagePending)
+  const picking = useValue($picking)
+  const [showLog, setShowLog] = useState(false)
+  const url = server?.state === 'ready' && server.url ? server.url : pending
+  const canScript = !!ctx.preview?.executeJavaScript
+  useEffect(() => {
+    // An exited server's output says why: show it instead of a bare "exited (1)".
+    if (server?.state === 'exited' && server.exit_code) setShowLog(true)
+  }, [server?.state])
+  return (
+    <div className="hi-run">
+      <div className="hi-run-tools">
+        <span className="hi-dim">Project UI</span>
+        <span className="hi-spacer" />
+        <button className="hi-btn" data-on={picking} title={picking ? 'Cancel the pick' : 'Pick an element in the Browser pane and send it to the chat'} disabled={!canScript} onClick={() => void pickElement()}>{icon('inspect')}</button>
+        <button className="hi-btn" title="Reload the page in the Browser pane" disabled={!canScript} onClick={() => void reloadPreview()}>{icon('refresh')}</button>
+        <button className="hi-btn" title="Show the Browser pane" onClick={() => ctx.runAction?.('view.showBrowser')}>{icon('globe')}</button>
+        <button className="hi-btn" title="Open in your browser" disabled={!url} onClick={() => url && void ctx.os.openExternal?.(url)}>{icon('link-external')}</button>
+      </div>
+      <ProjectBar showLog={showLog} onToggleLog={() => setShowLog(!showLog)} />
+      <TrustBannerSlot />
+      <StaleBanner />
+      {showLog ? <ServerLog /> : null}
+      <div className="hi-run-body">
+        {url ? (
+          <div className="hi-open-page">
+            <MessageTextContent media={false} text={`[Open ${url.replace(/^https?:\/\//, '').replace(/\/$/, '')} in the Browser](${url})`} />
+            <div className="hi-dim">Opens in the app's Browser pane (Ctrl+click: your system browser). Pick elements there with {icon('inspect', 12)} above.</div>
+          </div>
+        ) : (
+          <ProjectEmpty fallback="No web UI found in this folder. When one runs, its page opens from here." />
         )}
       </div>
     </div>
   )
 }
 
-function TrustBanner({ cand }: { cand: Candidate }) {
+/** The dev server's recent output, newest at the bottom. */
+export function ServerLog() {
+  const server = useValue($server)
+  const ref = useRef<HTMLPreElement>(null)
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [server?.log.length])
+  if (!server) return null
+  return <pre ref={ref} className="hi-log">{server.log.join('\n') || 'No output yet.'}</pre>
+}
+
+function TrustBannerSlot() {
+  const ask = useValue($askTrust)
+  return ask ? <TrustBanner cand={ask} /> : null
+}
+
+/** The full build's Browser column (the catalog build shows the project's UI in the Explorer
+ *  panel's Run view instead, and its page in the app's own Browser pane). */
+export function BrowserTile() {
+  return __CATALOG__ ? null : <FullBrowserTile />
+}
+
+export function TrustBanner({ cand }: { cand: Candidate }) {
   return (
     <div className="hi-banner">
       {icon('shield')}
       <span>
-        Found a {cand.framework} app{cand.rel ? ` in ${cand.rel}` : ''}. Run <code>{cand.command}</code>
-        {cand.installed ? '' : ' (installs dependencies first)'}? It runs this project's own code on the agent's machine.
+        {cand.kind === 'static' ? (
+          <>Found a static site{cand.rel ? ` in ${cand.rel}` : ''}. Serve this folder on 127.0.0.1 (no dotfiles, no folder listings)?</>
+        ) : (
+          <>
+            Found a {cand.framework} app{cand.rel ? ` in ${cand.rel}` : ''}. Run <code>{cand.command}</code>
+            {cand.installed ? '' : ' (installs dependencies first)'}? It runs this project's own code on the agent's machine.
+          </>
+        )}
       </span>
       <span className="hi-spacer" />
       <Button size="xs" variant="secondary" onClick={() => { trust(cand); void startUi() }}>Always run for this project</Button>
@@ -1061,21 +1189,21 @@ function TrustBanner({ cand }: { cand: Candidate }) {
 
 // ── Title bar: column toggles (and the IDE window's dialogs, mounted once here) ───────────────
 
-const TOGGLES: Array<{ id: TileId | 'terminal'; icon: string; label: string }> = [
+// The app's terminal has no plugin action (ctx.runAction allows view and navigation actions only),
+// so the terminal keeps the app's own toggle and shortcut.
+const TOGGLES: Array<{ id: TileId; icon: string; label: string }> = [
   { id: 'explorer', icon: 'layout-sidebar-left', label: 'Explorer' },
   { id: 'editor', icon: 'code', label: 'Editor' },
-  { id: 'browser', icon: 'globe', label: 'Browser' },
-  { id: 'terminal', icon: 'terminal', label: 'Terminal' }
+  { id: 'browser', icon: __CATALOG__ ? 'play-circle' : 'globe', label: __CATALOG__ ? 'Project UI' : 'Browser' }
 ]
 
 export function LayoutToggles() {
   const open = useValue($openTiles)
-  const terminal = useValue(useMemo(() => host.paneVisibility?.('terminal') ?? $openTiles, []))
   return (
     <span className="hi-toggles">
       <Styles />
       {TOGGLES.map(t => {
-        const on = t.id === 'terminal' ? terminal === true : open.includes(t.id)
+        const on = open.includes(t.id)
         return (
           <button
             key={t.id}
@@ -1083,7 +1211,7 @@ export function LayoutToggles() {
             data-on={on}
             aria-pressed={on}
             title={`${on ? 'Hide' : 'Show'} ${t.label}`}
-            onClick={() => (t.id === 'terminal' ? ctx.runAction?.(on ? 'view.closeTerminal' : 'view.showTerminal') : toggleTile(t.id))}
+            onClick={() => toggleTile(t.id)}
           >
             {icon(t.icon, 15)}
           </button>
@@ -1094,33 +1222,31 @@ export function LayoutToggles() {
   )
 }
 
-// ── Sidebar decoration: an IDE chat's row carries an IDE badge and opens the IDE window ──────
+// ── Sidebar decoration: an IDE chat's row carries an IDE badge that opens its IDE window ──────
 
 export function IdeRowBadge({ sessionId }: { sessionId: string }) {
   const chats = useValue($ideChats)
   const ref = useRef<HTMLSpanElement>(null)
   const isIde = !!chats[sessionId]
-  useLayoutEffect(() => {
-    // The row body: the nearest ancestor holding the row's title button (its real button), not
-    // the actions cluster. The slot may wrap the badge, so its parent is not enough.
-    let body = ref.current?.parentElement ?? null
-    while (body && !body.querySelector('button:not([data-row-actions] button)')) body = body.parentElement
-    if (!body || !isIde) return
-    // The row body's click resolver opens the chat as a tab; an IDE chat opens in its window.
-    // Modifier clicks (pin, open in a split) keep the app's meaning.
-    const onClick = (e: MouseEvent) => {
-      if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
-      if ((e.target as HTMLElement).closest('[data-row-actions], [data-reorder-handle]')) return
-      e.preventDefault()
-      e.stopPropagation()
-      void openIdeWindow({ sid: sessionId })
-    }
-    body.addEventListener('click', onClick, true)
-    return () => body.removeEventListener('click', onClick, true)
-  }, [isIde, sessionId])
+  // Full build: a plain click anywhere on an IDE chat's row opens the IDE window as well.
+  if (!__CATALOG__) useIdeRowClick(ref, isIde, sessionId)
   if (!isIde) return null
+  const open = (e: { preventDefault: () => void; stopPropagation: () => void }) => {
+    // The badge sits inside the row's own button: keep the row from also opening the chat here.
+    e.preventDefault()
+    e.stopPropagation()
+    void openIdeWindow({ sid: sessionId })
+  }
   return (
-    <span ref={ref} className="hi-ide-badge" data-ide-sid={sessionId} title="IDE chat: opens in the Hermes IDE window">
+    <span
+      ref={ref}
+      className="hi-ide-badge"
+      data-ide-sid={sessionId}
+      role="button"
+      title="IDE chat: open it in the Hermes IDE window"
+      onClick={open}
+      onPointerDown={e => e.stopPropagation()}
+    >
       IDE
     </span>
   )
@@ -1196,7 +1322,7 @@ function QuickOpen() {
           />
           <div className="hi-qo-list">
             {results.map((rel, i) => (
-              <div key={rel} className="hi-qo-row" data-on={i === sel} onMouseEnter={() => setSel(i)} onClick={() => choose(rel)}>
+              <div key={rel} ref={i === sel ? el => el?.scrollIntoView({ block: 'nearest' }) : undefined} className="hi-qo-row" data-on={i === sel} onMouseEnter={() => setSel(i)} onClick={() => choose(rel)}>
                 {icon(fileIcon(rel))}
                 <span>{baseName(rel)}</span>
                 <span className="hi-dim" style={{ fontSize: 11.5 }}>{dirName(rel) === rel ? '' : dirName(rel)}</span>
@@ -1267,11 +1393,14 @@ export function StatusItem() {
   const active = useValue($active)
   if (!IDE_WINDOW) {
     return (
-      <button className="hi-open-ide" onClick={() => void openIdeWindow()} title="Open this chat in the Hermes IDE window (Ctrl+Alt+I)">
+      <span className="hi-open-wrap">
         <Styles />
-        {icon('code')}
-        <span>IDE</span>
-      </button>
+        <button className="hi-open-ide" onClick={() => void openIdeWindow()} title="Open this chat in the Hermes IDE window (Ctrl+Alt+I)">
+          {icon('code')}
+          <span>IDE</span>
+        </button>
+        <IdeChatsMenu />
+      </span>
     )
   }
   if (!active || !cursor) return null
@@ -1285,13 +1414,88 @@ export function StatusItem() {
   )
 }
 
+/** The status bar's IDE menu: every IDE chat (pinned first), each opening in its IDE window. */
+function IdeChatsMenu() {
+  const [open, setOpen] = useState(false)
+  const rows = useValue($sessionRows)
+  const chats = useValue($ideChats)
+  const list = useMemo(() => {
+    const all = ideRows(rows, chats)
+    return [...all.filter(r => r.pinned), ...all.filter(r => !r.pinned)]
+  }, [rows, chats])
+  const go = (sid: string) => {
+    setOpen(false)
+    void openIdeWindow({ sid })
+  }
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button className="hi-open-more" title="IDE chats" aria-label="IDE chats">{icon('chevron-up', 12)}</button>
+      </PopoverTrigger>
+      <PopoverContent side="top" align="end" className="hi-chats" style={{ padding: 4, width: 'auto' }}>
+        <Styles />
+        <div className="hi-chats-head">IDE chats{list.length ? ` · ${list.length}` : ''}</div>
+        <div className="hi-chats-list">
+          {list.length ? (
+            list.map(r => (
+              <button key={durable(r)} className="hi-chat" title={r.title || r.preview || ''} onClick={() => go(durable(r))}>
+                {icon(r.pinned ? 'pinned' : 'code', 13)}
+                <span className="hi-chat-title">{r.title || r.preview || 'Untitled chat'}</span>
+                <span className="hi-chat-age">{age(r.last_active || r.started_at)}</span>
+                <span
+                  className="hi-chat-x"
+                  role="button"
+                  title="Remove from IDE chats (it then opens as a normal chat)"
+                  onClick={e => {
+                    e.stopPropagation()
+                    unmarkIdeChat(Object.keys(chats).filter(id => id === r.id || id === r._lineage_root_id))
+                  }}
+                >
+                  {icon('close', 12)}
+                </span>
+              </button>
+            ))
+          ) : (
+            <div className="hi-chats-empty">Chats you open in the IDE are listed here, and their rows in the session list carry an IDE badge.</div>
+          )}
+        </div>
+        <div className="hi-chats-sep" />
+        <button className="hi-chat" onClick={() => { setOpen(false); void openIdeWindow() }}>{icon('code', 13)}<span className="hi-chat-title">Open this chat in the IDE</span><span className="hi-chat-age">Ctrl+Alt+I</span></button>
+        <button className="hi-chat" onClick={() => { setOpen(false); startNewIdeChat() }}>{icon('add', 13)}<span className="hi-chat-title">New IDE chat</span></button>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+function TrustedProjects() {
+  const keys = useValue($trusted)
+  if (!keys.length) return null
+  return (
+    <div style={{ padding: '10px 0' }}>
+      <div style={{ fontSize: 13, marginBottom: 6 }}>Projects that run automatically</div>
+      {keys.map(k => {
+        const [dir, command, run] = k.split('\n')
+        return (
+          <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0', fontSize: 12 }}>
+            <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={`${dir}\n${command}${run ? ` (${run})` : ''}`}>
+              {dir} <span className="hi-dim">· {command}</span>
+            </span>
+            <Button size="xs" variant="ghost" onClick={() => revokeTrust(k)}>Revoke</Button>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 export function SettingsPage() {
   const s = useValue($settings)
   return (
     <div>
       <ToggleRow label="Follow the chat's folder" description="The Explorer opens the working directory of the chat you are looking at." checked={s.followSession} onChange={v => setSetting('followSession', v)} />
       <ToggleRow label="Review agent edits" description="When Hermes edits an open file, show the change inline with Keep and Undo." checked={s.reviewAgentEdits} onChange={v => setSetting('reviewAgentEdits', v)} />
-      <ToggleRow label="Run the project's UI automatically" description="When the IDE opens a project you have trusted, start its dev server and show it in the Browser column." checked={s.autoRunUi} onChange={v => setSetting('autoRunUi', v)} />
+      <ToggleRow label="Run the project's UI automatically" description={__CATALOG__ ? "When the IDE opens a project you have trusted, start its dev server; its page then opens from the Project UI column." : "When the IDE opens a project you have trusted, start its dev server and show it in the Browser column."} checked={s.autoRunUi} onChange={v => setSetting('autoRunUi', v)} />
+      <TrustedProjects />
       <ToggleRow label="Show hidden files" checked={s.showHidden} onChange={v => setSetting('showHidden', v)} />
       <ToggleRow label="Word wrap" checked={s.wordWrap} onChange={v => setSetting('wordWrap', v)} />
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 0' }}>
@@ -1306,12 +1510,16 @@ export function SettingsPage() {
   )
 }
 
-export function OpenCard({ attrs }: { attrs: Readonly<Record<string, string>> }) {
-  const path = (attrs.path || '').trim()
+export function OpenCard({ attrs, sessionId }: { attrs: Readonly<Record<string, string>>; sessionId?: string | null }) {
+  const raw = (attrs.path || '').trim()
   const line = Number(attrs.line) > 0 ? Number(attrs.line) : undefined
-  if (!path || path.length > 1024) return null
+  if (!raw || raw.length > 1024) return null
+  // The agent may name a path relative to its working directory.
+  const path = /^([a-zA-Z]:)?[\\/]/.test(raw) ? raw : joinPath(host.state.cwd.get() || '', raw)
+  // In the main window the file opens in this chat's IDE window; in the IDE window, right here.
+  const open = () => void (IDE_WINDOW ? openFile(path, { line }) : openIdeWindow({ path, line, sid: sessionId || undefined }))
   return (
-    <button className="hi-card" onClick={() => void openFile(path, { line })} title="Open in the Hermes IDE">
+    <button className="hi-card" onClick={open} title="Open in the Hermes IDE">
       <Styles />
       {icon('go-to-file')}
       <span>{baseName(path)}{line ? `:${line}` : ''}</span>

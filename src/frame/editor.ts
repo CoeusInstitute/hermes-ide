@@ -1,8 +1,10 @@
-// Hermes IDE editor frame. Runs inside a sandboxed srcdoc iframe (opaque origin) so the editor owns
-// the keyboard: keydown inside a child document never reaches the app's window-capture keybind
-// dispatcher, which otherwise claims Ctrl+D/F/G/K/P and Ctrl+/ from any in-DOM editor.
-// It talks to the plugin only through postMessage. One EditorView; one EditorState per open file, so
-// undo history survives tab switches.
+// Hermes IDE editor. CodeMirror runs in the plugin's own code but renders into a same-origin
+// child document (the editor iframe, whose markup holds no script), so the editor owns the keyboard:
+// keydown inside a child document never reaches the app's window-capture keybind dispatcher, which
+// otherwise claims Ctrl+D/F/G/K/P and Ctrl+/ from any in-DOM editor.
+// It talks to the plugin through two functions only: `send` (frame -> plugin) and the returned
+// `receive` (plugin -> frame), with the same message shapes a postMessage bridge would carry.
+// One EditorView; one EditorState per open file, so undo history survives tab switches.
 
 import { autocompletion, closeBrackets, closeBracketsKeymap, completionKeymap } from '@codemirror/autocomplete'
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands'
@@ -58,9 +60,15 @@ import {
 } from '@codemirror/view'
 import { tags as t } from '@lezer/highlight'
 
-type Msg = Record<string, any> & { type: string }
+export type Msg = Record<string, any> & { type: string }
 
-const send = (msg: Msg, transfer?: Transferable[]) => window.parent.postMessage(msg, '*', transfer)
+/** Every line ending as `eol`. */
+export const normalizeEol = (text: string, eol: string) => text.replace(/\r\n|\r|\n/g, eol)
+
+export interface EditorFrame {
+  receive: (msg: Msg) => void
+  destroy: () => void
+}
 
 // ── languages ────────────────────────────────────────────────────────────────────────────────
 
@@ -183,15 +191,6 @@ const chrome = EditorView.theme({
   '.cm-deletedLineGutter': { background: 'var(--ui-red)' }
 })
 
-// ── inline edit (Ctrl+K): a prompt panel bound to the current selection ──────────────────────
-
-const toggleInline = StateEffect.define<boolean>()
-const inlineField = StateField.define<boolean>({
-  create: () => false,
-  update: (v, tr) => tr.effects.reduce((acc, e) => (e.is(toggleInline) ? e.value : acc), v),
-  provide: f => showPanel.from(f, on => (on ? inlinePanel : null))
-})
-
 function lineRange(state: EditorState) {
   const sel = state.selection.main
   const from = state.doc.lineAt(sel.from).number
@@ -202,416 +201,450 @@ function lineRange(state: EditorState) {
   return { from, to }
 }
 
-function inlinePanel(view: EditorView): Panel {
-  const dom = document.createElement('div')
-  dom.className = 'ide-inline'
-  const { from, to } = lineRange(view.state)
-  const label = document.createElement('span')
-  label.className = 'ide-inline-label'
-  label.textContent = from === to ? `Edit line ${from} with Hermes` : `Edit lines ${from}-${to} with Hermes`
-  const input = document.createElement('input')
-  input.placeholder = 'Describe the change, then Enter. Esc to cancel.'
-  input.addEventListener('keydown', e => {
-    if (e.key === 'Escape') {
-      e.preventDefault()
-      view.dispatch({ effects: toggleInline.of(false) })
-      view.focus()
-    } else if (e.key === 'Enter' && input.value.trim()) {
-      e.preventDefault()
-      const r = lineRange(view.state)
-      send({ type: 'inlineEdit', path: currentPath, from: r.from, to: r.to, instruction: input.value.trim() })
-      view.dispatch({ effects: toggleInline.of(false) })
-      view.focus()
-    }
+/** Mount the editor into a child document (`win`, same origin, its markup from the build's frame
+ *  skeleton: #empty, #editor and #menu). `send` carries frame -> plugin messages. */
+export function mountEditor(win: Window, send: (msg: Msg) => void): EditorFrame {
+  const doc = win.document
+
+  // ── inline edit (Ctrl+K): a prompt panel bound to the current selection ──────────────────────
+
+  const toggleInline = StateEffect.define<boolean>()
+  const inlineField = StateField.define<boolean>({
+    create: () => false,
+    update: (v, tr) => tr.effects.reduce((acc, e) => (e.is(toggleInline) ? e.value : acc), v),
+    provide: f => showPanel.from(f, on => (on ? inlinePanel : null))
   })
-  dom.append(label, input)
-  return { dom, top: true, mount: () => input.focus() }
-}
 
-// ── state ────────────────────────────────────────────────────────────────────────────────────
-
-interface FileState {
-  state: EditorState
-  saved: Text
-  pendingSave: Text | null
-  eol: string
-  lang: string
-  wasDirty: boolean
-}
-
-const files = new Map<string, FileState>()
-let currentPath: string | null = null
-let dark = true
-let fontSize = 13
-let wrap = false
-
-const themeComp = new Compartment()
-const wrapComp = new Compartment()
-const diffComp = new Compartment()
-const readOnlyComp = new Compartment()
-
-let draftTimer = 0
-let cursorTimer = 0
-
-function commandKey(id: string) {
-  return () => {
-    send({ type: 'command', id })
-    return true
-  }
-}
-
-// The empty-editor table: each row runs its command. Mac keyboards say ⌘ and ⌥.
-document.getElementById('empty')?.addEventListener('click', e => {
-  const id = (e.target as HTMLElement).closest<HTMLElement>('[data-cmd]')?.dataset.cmd
-  if (id) send({ type: 'command', id })
-})
-if (/Mac/.test(navigator.platform)) {
-  for (const k of document.querySelectorAll('#empty kbd')) k.textContent = ({ Ctrl: '⌘', Alt: '⌥' } as Record<string, string>)[k.textContent || ''] ?? k.textContent
-}
-
-function addToChat(view: EditorView) {
-  const r = lineRange(view.state)
-  send({ type: 'addToChat', path: currentPath, from: r.from, to: r.to, empty: view.state.selection.main.empty })
-  return true
-}
-
-function save() {
-  const f = currentPath ? files.get(currentPath) : null
-  if (!f || !currentPath) {
-    return true
-  }
-  f.pendingSave = f.state.doc
-  send({ type: 'save', path: currentPath, text: f.state.sliceDoc() })
-  return true
-}
-
-const ideKeymap = keymap.of([
-  { key: 'Mod-s', run: save, preventDefault: true },
-  { key: 'Mod-l', run: addToChat, preventDefault: true },
-  { key: 'Mod-k', run: v => (v.dispatch({ effects: toggleInline.of(true) }), true), preventDefault: true },
-  { key: 'Mod-g', run: gotoLine, preventDefault: true },
-  { key: 'Mod-p', run: commandKey('quickOpen'), preventDefault: true },
-  { key: 'Mod-Shift-p', run: commandKey('palette'), preventDefault: true },
-  { key: 'F1', run: commandKey('palette'), preventDefault: true },
-  { key: 'Mod-Shift-f', run: commandKey('findInFiles'), preventDefault: true },
-  { key: 'Mod-Shift-e', run: commandKey('explorer'), preventDefault: true },
-  { key: 'Mod-b', run: commandKey('toggleSidebar'), preventDefault: true },
-  { key: 'Mod-j', run: commandKey('toggleTerminal'), preventDefault: true },
-  { key: 'Ctrl-`', run: commandKey('toggleTerminal'), preventDefault: true },
-  { key: 'Mod-w', run: commandKey('closeTab'), preventDefault: true },
-  { key: 'Mod-Alt-ArrowRight', run: commandKey('nextTab'), preventDefault: true },
-  { key: 'Mod-Alt-ArrowLeft', run: commandKey('prevTab'), preventDefault: true },
-  { key: 'Mod-PageDown', run: commandKey('nextTab'), preventDefault: true },
-  { key: 'Mod-PageUp', run: commandKey('prevTab'), preventDefault: true },
-  { key: 'Mod-Shift-s', run: commandKey('saveAll'), preventDefault: true }
-])
-
-function extensions(path: string, lang: Extension, eol: string): Extension[] {
-  return [
-    EditorState.lineSeparator.of(eol),
-    lineNumbers(),
-    highlightActiveLineGutter(),
-    highlightSpecialChars(),
-    history(),
-    foldGutter(),
-    drawSelection(),
-    dropCursor(),
-    EditorState.allowMultipleSelections.of(true),
-    indentOnInput(),
-    bracketMatching(),
-    closeBrackets(),
-    autocompletion(),
-    rectangularSelection(),
-    crosshairCursor(),
-    highlightActiveLine(),
-    highlightSelectionMatches(),
-    inlineField,
-    ideKeymap,
-    keymap.of([...closeBracketsKeymap, ...defaultKeymap, ...searchKeymap, ...historyKeymap, ...foldKeymap, ...completionKeymap, indentWithTab]),
-    lang,
-    chrome,
-    themeComp.of(highlight(dark)),
-    wrapComp.of(wrap ? EditorView.lineWrapping : []),
-    diffComp.of([]),
-    readOnlyComp.of([]),
-    EditorView.updateListener.of(u => {
-      if (u.docChanged) {
-        onDocChanged(path)
-      }
-      if (u.selectionSet || u.docChanged) {
-        clearTimeout(cursorTimer)
-        cursorTimer = window.setTimeout(postCursor, 60)
-      }
-    })
-  ]
-}
-
-const view = new EditorView({ parent: document.getElementById('editor')!, state: EditorState.create({ doc: '' }) })
-view.dom.style.display = 'none'
-
-function postCursor() {
-  if (!currentPath) {
-    return
-  }
-  const s = view.state
-  const sel = s.selection.main
-  const line = s.doc.lineAt(sel.head)
-  const f = files.get(currentPath)
-  send({ type: 'cursor', path: currentPath, line: line.number, col: sel.head - line.from + 1, sel: Math.abs(sel.to - sel.from), lang: f?.lang, eol: f?.eol === '\r\n' ? 'CRLF' : 'LF' })
-}
-
-function onDocChanged(path: string) {
-  const f = files.get(path)
-  if (!f) {
-    return
-  }
-  if (path === currentPath) {
-    f.state = view.state
-  }
-  const dirty = !f.state.doc.eq(f.saved)
-  if (dirty !== f.wasDirty) {
-    f.wasDirty = dirty
-    send({ type: 'dirty', path, dirty })
-  }
-  // Mirror unsaved text to the plugin so a remount of this frame never loses edits.
-  clearTimeout(draftTimer)
-  draftTimer = window.setTimeout(() => {
-    const cur = files.get(path)
-    if (cur) {
-      send({ type: 'draft', path, text: cur.wasDirty ? cur.state.sliceDoc() : null })
-    }
-  }, 400)
-  const chunks = getChunks(f.state)
-  if (chunks && chunks.chunks.length === 0) {
-    send({ type: 'diffResolved', path })
-  }
-}
-
-function stash() {
-  if (currentPath && files.has(currentPath)) {
-    files.get(currentPath)!.state = view.state
-  }
-}
-
-function show(path: string, line?: number, col?: number) {
-  const f = files.get(path)
-  if (!f) {
-    return
-  }
-  stash()
-  currentPath = path
-  // Re-apply the live theme/wrap to a state created under older settings.
-  view.setState(f.state)
-  view.dispatch({ effects: [themeComp.reconfigure(highlight(dark)), wrapComp.reconfigure(wrap ? EditorView.lineWrapping : [])] })
-  f.state = view.state
-  view.dom.style.display = ''
-  document.getElementById('empty')!.style.display = 'none'
-  if (line && line > 0) {
-    const ln = view.state.doc.line(Math.min(line, view.state.doc.lines))
-    const pos = Math.min(ln.from + Math.max(0, (col || 1) - 1), ln.to)
-    view.dispatch({ selection: EditorSelection.cursor(pos), effects: EditorView.scrollIntoView(pos, { y: 'center' }) })
-  }
-  view.focus()
-  postCursor()
-}
-
-function setDiff(path: string, original: string | null) {
-  const f = files.get(path)
-  if (!f) {
-    return
-  }
-  const ext = original == null ? [] : unifiedMergeView({ original, mergeControls: true, highlightChanges: true, gutter: true })
-  if (path === currentPath) {
-    view.dispatch({ effects: diffComp.reconfigure(ext) })
-    f.state = view.state
-  } else {
-    f.state = f.state.update({ effects: diffComp.reconfigure(ext) }).state
-  }
-}
-
-function replace(path: string, text: string, markSaved: boolean) {
-  const f = files.get(path)
-  if (!f) {
-    return
-  }
-  const spec = { changes: { from: 0, to: f.state.doc.length, insert: text } }
-  if (path === currentPath) {
-    view.dispatch(spec)
-    f.state = view.state
-  } else {
-    f.state = f.state.update(spec).state
-  }
-  if (markSaved) {
-    f.saved = f.state.doc
-    f.wasDirty = false
-    send({ type: 'dirty', path, dirty: false })
-  }
-}
-
-// ── context menu ─────────────────────────────────────────────────────────────────────────────
-
-const menu = document.getElementById('menu')!
-const MENU: Array<[string, string, () => void] | null> = [
-  ['Add to Chat', 'Ctrl+L', () => addToChat(view)],
-  ['Edit with Hermes…', 'Ctrl+K', () => view.dispatch({ effects: toggleInline.of(true) })],
-  null,
-  ['Find', 'Ctrl+F', () => openSearchPanel(view)],
-  ['Go to Line…', 'Ctrl+G', () => gotoLine(view)],
-  ['Copy Relative Path', '', () => send({ type: 'command', id: 'copyRelativePath' })],
-  null,
-  ['Open in Browser', '', () => send({ type: 'command', id: 'openInBrowser' })],
-  ['Reveal in Explorer', '', () => send({ type: 'command', id: 'revealInExplorer' })]
-]
-
-function hideMenu() {
-  menu.style.display = 'none'
-}
-
-view.dom.addEventListener('contextmenu', e => {
-  e.preventDefault()
-  menu.replaceChildren(
-    ...MENU.map(item => {
-      if (!item) {
-        const sep = document.createElement('div')
-        sep.className = 'sep'
-        return sep
-      }
-      const row = document.createElement('button')
-      row.innerHTML = '<span></span><kbd></kbd>'
-      row.firstChild!.textContent = item[0]
-      row.lastChild!.textContent = item[1]
-      row.onclick = () => {
-        hideMenu()
-        item[2]()
+  function inlinePanel(view: EditorView): Panel {
+    const dom = doc.createElement('div')
+    dom.className = 'ide-inline'
+    const { from, to } = lineRange(view.state)
+    const label = doc.createElement('span')
+    label.className = 'ide-inline-label'
+    label.textContent = from === to ? `Edit line ${from} with Hermes` : `Edit lines ${from}-${to} with Hermes`
+    const input = doc.createElement('input')
+    input.placeholder = 'Describe the change, then Enter. Esc to cancel.'
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        view.dispatch({ effects: toggleInline.of(false) })
+        view.focus()
+      } else if (e.key === 'Enter' && input.value.trim()) {
+        e.preventDefault()
+        const r = lineRange(view.state)
+        send({ type: 'inlineEdit', path: currentPath, from: r.from, to: r.to, instruction: input.value.trim() })
+        view.dispatch({ effects: toggleInline.of(false) })
         view.focus()
       }
-      return row
     })
-  )
-  menu.style.display = 'block'
-  const r = menu.getBoundingClientRect()
-  menu.style.left = Math.min(e.clientX, innerWidth - r.width - 4) + 'px'
-  menu.style.top = Math.min(e.clientY, innerHeight - r.height - 4) + 'px'
-})
-addEventListener('mousedown', e => !menu.contains(e.target as Node) && hideMenu())
-addEventListener('blur', hideMenu)
-addEventListener('keydown', e => e.key === 'Escape' && hideMenu())
+    dom.append(label, input)
+    return { dom, top: true, mount: () => input.focus() }
+  }
 
-// ── protocol ─────────────────────────────────────────────────────────────────────────────────
+  // ── state ────────────────────────────────────────────────────────────────────────────────────
 
-function applyVars(vars: Record<string, string>) {
-  const root = document.documentElement
-  for (const [k, v] of Object.entries(vars || {})) {
-    root.style.setProperty(k, v)
+  interface FileState {
+    state: EditorState
+    saved: Text
+    pendingSave: Text | null
+    eol: string
+    lang: string
+    wasDirty: boolean
   }
-}
 
-function applyLook(m: Msg) {
-  if (typeof m.dark === 'boolean') {
-    dark = m.dark
-  }
-  if (typeof m.fontSize === 'number') {
-    fontSize = m.fontSize
-  }
-  if (typeof m.wrap === 'boolean') {
-    wrap = m.wrap
-  }
-  applyVars(m.vars)
-  document.documentElement.style.colorScheme = dark ? 'dark' : 'light'
-  document.documentElement.style.setProperty('--ide-font-size', fontSize + 'px')
-  if (currentPath) {
-    view.dispatch({ effects: [themeComp.reconfigure(highlight(dark)), wrapComp.reconfigure(wrap ? EditorView.lineWrapping : [])] })
-    files.get(currentPath)!.state = view.state
-  }
-}
+  const files = new Map<string, FileState>()
+  let currentPath: string | null = null
+  let dark = true
+  let fontSize = 13
+  let wrap = false
 
-const handlers: Record<string, (m: Msg) => void> = {
-  look: applyLook,
-  font: m => {
-    try {
-      const face = new FontFace(m.family, m.buffer, { style: m.style || 'normal', weight: m.weight || '400' })
-      face.load().then(f => document.fonts.add(f)).catch(() => undefined)
-    } catch {
-      /* a font we cannot decode keeps the fallback stack */
+  const themeComp = new Compartment()
+  const wrapComp = new Compartment()
+  const diffComp = new Compartment()
+  const readOnlyComp = new Compartment()
+
+  let draftTimer = 0
+  let cursorTimer = 0
+
+  function commandKey(id: string) {
+    return () => {
+      send({ type: 'command', id })
+      return true
     }
-  },
-  open: m => {
-    if (!files.has(m.path) && typeof m.text === 'string') {
-      const eol = m.eol === '\r\n' ? '\r\n' : '\n'
-      const { name, ext } = languageFor(m.path)
-      const savedText = typeof m.saved === 'string' ? m.saved : m.text
-      const state = EditorState.create({ doc: m.text, extensions: extensions(m.path, ext, eol) })
-      const saved = savedText === m.text ? state.doc : Text.of(savedText.split(/\r\n|\r|\n/))
-      files.set(m.path, { state, saved, pendingSave: null, eol, lang: name, wasDirty: !state.doc.eq(saved) })
-      if (!state.doc.eq(saved)) {
-        send({ type: 'dirty', path: m.path, dirty: true })
-      }
+  }
+
+  // The empty-editor table: each row runs its command. Mac keyboards say ⌘ and ⌥.
+  doc.getElementById('empty')?.addEventListener('click', e => {
+    const id = (e.target as HTMLElement).closest<HTMLElement>('[data-cmd]')?.dataset.cmd
+    if (id) send({ type: 'command', id })
+  })
+  if (/Mac/.test(navigator.platform)) {
+    for (const k of doc.querySelectorAll('#empty kbd')) k.textContent = ({ Ctrl: '⌘', Alt: '⌥' } as Record<string, string>)[k.textContent || ''] ?? k.textContent
+  }
+
+  function addToChat(view: EditorView) {
+    const r = lineRange(view.state)
+    send({ type: 'addToChat', path: currentPath, from: r.from, to: r.to, empty: view.state.selection.main.empty })
+    return true
+  }
+
+  function save() {
+    const f = currentPath ? files.get(currentPath) : null
+    if (!f || !currentPath) {
+      return true
     }
-    if (typeof m.original === 'string') {
-      setDiff(m.path, m.original)
+    f.pendingSave = f.state.doc
+    send({ type: 'save', path: currentPath, text: f.state.sliceDoc() })
+    return true
+  }
+
+  const ideKeymap = keymap.of([
+    { key: 'Mod-s', run: save, preventDefault: true },
+    { key: 'Mod-l', run: addToChat, preventDefault: true },
+    { key: 'Mod-k', run: v => (v.dispatch({ effects: toggleInline.of(true) }), true), preventDefault: true },
+    { key: 'Mod-g', run: gotoLine, preventDefault: true },
+    { key: 'Mod-p', run: commandKey('quickOpen'), preventDefault: true },
+    { key: 'Mod-Shift-p', run: commandKey('palette'), preventDefault: true },
+    { key: 'F1', run: commandKey('palette'), preventDefault: true },
+    { key: 'Mod-Shift-f', run: commandKey('findInFiles'), preventDefault: true },
+    { key: 'Mod-Shift-e', run: commandKey('explorer'), preventDefault: true },
+    { key: 'Mod-b', run: commandKey('toggleSidebar'), preventDefault: true },
+    { key: 'Mod-j', run: commandKey('toggleTerminal'), preventDefault: true },
+    { key: 'Ctrl-`', run: commandKey('toggleTerminal'), preventDefault: true },
+    { key: 'Mod-w', run: commandKey('closeTab'), preventDefault: true },
+    { key: 'Mod-Alt-ArrowRight', run: commandKey('nextTab'), preventDefault: true },
+    { key: 'Mod-Alt-ArrowLeft', run: commandKey('prevTab'), preventDefault: true },
+    { key: 'Mod-PageDown', run: commandKey('nextTab'), preventDefault: true },
+    { key: 'Mod-PageUp', run: commandKey('prevTab'), preventDefault: true },
+    { key: 'Mod-Shift-s', run: commandKey('saveAll'), preventDefault: true }
+  ])
+
+  function extensions(path: string, lang: Extension, eol: string): Extension[] {
+    return [
+      EditorState.lineSeparator.of(eol),
+      lineNumbers(),
+      highlightActiveLineGutter(),
+      highlightSpecialChars(),
+      history(),
+      foldGutter(),
+      drawSelection(),
+      dropCursor(),
+      EditorState.allowMultipleSelections.of(true),
+      indentOnInput(),
+      bracketMatching(),
+      closeBrackets(),
+      autocompletion(),
+      rectangularSelection(),
+      crosshairCursor(),
+      highlightActiveLine(),
+      highlightSelectionMatches(),
+      inlineField,
+      ideKeymap,
+      keymap.of([...closeBracketsKeymap, ...defaultKeymap, ...searchKeymap, ...historyKeymap, ...foldKeymap, ...completionKeymap, indentWithTab]),
+      lang,
+      chrome,
+      themeComp.of(highlight(dark)),
+      wrapComp.of(wrap ? EditorView.lineWrapping : []),
+      diffComp.of([]),
+      readOnlyComp.of([]),
+      EditorView.updateListener.of(u => {
+        if (u.docChanged) {
+          onDocChanged(path)
+        }
+        if (u.selectionSet || u.docChanged) {
+          clearTimeout(cursorTimer)
+          cursorTimer = win.setTimeout(postCursor, 60)
+        }
+      })
+    ]
+  }
+
+  const view = new EditorView({ parent: doc.getElementById('editor')!, root: doc, state: EditorState.create({ doc: '' }) })
+  view.dom.style.display = 'none'
+
+  function postCursor() {
+    if (!currentPath) {
+      return
     }
-    if (m.show !== false) {
-      show(m.path, m.line, m.col)
+    const s = view.state
+    const sel = s.selection.main
+    const line = s.doc.lineAt(sel.head)
+    const f = files.get(currentPath)
+    send({ type: 'cursor', path: currentPath, line: line.number, col: sel.head - line.from + 1, sel: Math.abs(sel.to - sel.from), lang: f?.lang, eol: f?.eol === '\r\n' ? 'CRLF' : 'LF' })
+  }
+
+  function onDocChanged(path: string) {
+    const f = files.get(path)
+    if (!f) {
+      return
     }
-  },
-  show: m => show(m.path, m.line, m.col),
-  close: m => {
-    files.delete(m.path)
-    if (currentPath === m.path) {
-      currentPath = null
-      view.setState(EditorState.create({ doc: '' }))
-      view.dom.style.display = 'none'
-      document.getElementById('empty')!.style.display = ''
+    if (path === currentPath) {
+      f.state = view.state
     }
-  },
-  rename: m => {
-    const f = files.get(m.from)
-    if (f) {
-      files.delete(m.from)
-      files.set(m.to, f)
-      if (currentPath === m.from) {
-        currentPath = m.to
-      }
-    }
-  },
-  replace: m => {
-    replace(m.path, m.text, m.markSaved !== false)
-    if (m.original !== undefined) {
-      setDiff(m.path, m.original)
-    }
-  },
-  setDiff: m => setDiff(m.path, m.original ?? null),
-  saved: m => {
-    const f = files.get(m.path)
-    if (f) {
-      f.saved = f.pendingSave ?? f.state.doc
-      f.pendingSave = null
-      const dirty = !f.state.doc.eq(f.saved)
+    const dirty = !f.state.doc.eq(f.saved)
+    if (dirty !== f.wasDirty) {
       f.wasDirty = dirty
-      send({ type: 'dirty', path: m.path, dirty })
-      send({ type: 'draft', path: m.path, text: dirty ? f.state.sliceDoc() : null })
+      send({ type: 'dirty', path, dirty })
     }
-  },
-  saveRequest: m => {
-    const f = files.get(m.path)
-    if (f) {
-      if (m.path === currentPath) {
-        f.state = view.state
+    // Mirror unsaved text to the plugin so a remount of this frame never loses edits.
+    clearTimeout(draftTimer)
+    draftTimer = win.setTimeout(() => {
+      const cur = files.get(path)
+      if (cur) {
+        send({ type: 'draft', path, text: cur.wasDirty ? cur.state.sliceDoc() : null })
       }
-      f.pendingSave = f.state.doc
-      send({ type: 'save', path: m.path, text: f.state.sliceDoc() })
+    }, 400)
+    const chunks = getChunks(f.state)
+    if (chunks && chunks.chunks.length === 0) {
+      send({ type: 'diffResolved', path })
     }
-  },
-  inlineEdit: () => view.dispatch({ effects: toggleInline.of(true) }),
-  find: () => openSearchPanel(view),
-  focus: () => view.focus()
-}
-
-addEventListener('message', e => {
-  if (e.source !== window.parent || !e.data || typeof e.data.type !== 'string') {
-    return
   }
-  handlers[e.data.type]?.(e.data)
-})
 
-send({ type: 'ready' })
+  function stash() {
+    if (currentPath && files.has(currentPath)) {
+      files.get(currentPath)!.state = view.state
+    }
+  }
+
+  function show(path: string, line?: number, col?: number) {
+    const f = files.get(path)
+    if (!f) {
+      return
+    }
+    stash()
+    currentPath = path
+    // Re-apply the live theme/wrap to a state created under older settings.
+    view.setState(f.state)
+    view.dispatch({ effects: [themeComp.reconfigure(highlight(dark)), wrapComp.reconfigure(wrap ? EditorView.lineWrapping : [])] })
+    f.state = view.state
+    view.dom.style.display = ''
+    doc.getElementById('empty')!.style.display = 'none'
+    if (line && line > 0) {
+      const ln = view.state.doc.line(Math.min(line, view.state.doc.lines))
+      const pos = Math.min(ln.from + Math.max(0, (col || 1) - 1), ln.to)
+      view.dispatch({ selection: EditorSelection.cursor(pos), effects: EditorView.scrollIntoView(pos, { y: 'center' }) })
+    }
+    view.focus()
+    postCursor()
+  }
+
+  function setDiff(path: string, original: string | null) {
+    const f = files.get(path)
+    if (!f) {
+      return
+    }
+    const ext = original == null ? [] : unifiedMergeView({ original, mergeControls: true, highlightChanges: true, gutter: true })
+    if (path === currentPath) {
+      view.dispatch({ effects: diffComp.reconfigure(ext) })
+      f.state = view.state
+    } else {
+      f.state = f.state.update({ effects: diffComp.reconfigure(ext) }).state
+    }
+  }
+
+  function replace(path: string, raw: string, markSaved: boolean) {
+    const f = files.get(path)
+    if (!f) {
+      return
+    }
+    // Change only what differs (common prefix and suffix kept), so the cursor and scroll stay put
+    // when the agent edits the open file.
+    const text = normalizeEol(raw, f.eol)
+    const old = f.state.sliceDoc()
+    let a = 0
+    while (a < old.length && a < text.length && old[a] === text[a]) a++
+    let z = 0
+    while (z < old.length - a && z < text.length - a && old[old.length - 1 - z] === text[text.length - 1 - z]) z++
+    const spec = { changes: { from: a, to: old.length - z, insert: text.slice(a, text.length - z) } }
+    if (path === currentPath) {
+      view.dispatch(spec)
+      f.state = view.state
+    } else {
+      f.state = f.state.update(spec).state
+    }
+    if (markSaved) {
+      f.saved = f.state.doc
+      f.wasDirty = false
+      send({ type: 'dirty', path, dirty: false })
+    }
+  }
+
+  // ── context menu ─────────────────────────────────────────────────────────────────────────────
+
+  const menu = doc.getElementById('menu')!
+  const MENU: Array<[string, string, () => void] | null> = [
+    ['Add to Chat', 'Ctrl+L', () => addToChat(view)],
+    ['Edit with Hermes…', 'Ctrl+K', () => view.dispatch({ effects: toggleInline.of(true) })],
+    null,
+    ['Find', 'Ctrl+F', () => openSearchPanel(view)],
+    ['Go to Line…', 'Ctrl+G', () => gotoLine(view)],
+    ['Copy Relative Path', '', () => send({ type: 'command', id: 'copyRelativePath' })],
+    null,
+    ['Open in Browser', '', () => send({ type: 'command', id: 'openInBrowser' })],
+    ['Reveal in Explorer', '', () => send({ type: 'command', id: 'revealInExplorer' })]
+  ]
+
+  function hideMenu() {
+    menu.style.display = 'none'
+  }
+
+  view.dom.addEventListener('contextmenu', e => {
+    e.preventDefault()
+    menu.replaceChildren(
+      ...MENU.map(item => {
+        if (!item) {
+          const sep = doc.createElement('div')
+          sep.className = 'sep'
+          return sep
+        }
+        const row = doc.createElement('button')
+        row.innerHTML = '<span></span><kbd></kbd>'
+        row.firstChild!.textContent = item[0]
+        row.lastChild!.textContent = item[1]
+        row.onclick = () => {
+          hideMenu()
+          item[2]()
+          view.focus()
+        }
+        return row
+      })
+    )
+    menu.style.display = 'block'
+    const r = menu.getBoundingClientRect()
+    menu.style.left = Math.min(e.clientX, win.innerWidth - r.width - 4) + 'px'
+    menu.style.top = Math.min(e.clientY, win.innerHeight - r.height - 4) + 'px'
+  })
+  const onDown = (e: MouseEvent) => !menu.contains(e.target as Node) && hideMenu()
+  const onKey = (e: KeyboardEvent) => e.key === 'Escape' && hideMenu()
+  win.addEventListener('mousedown', onDown)
+  win.addEventListener('blur', hideMenu)
+  win.addEventListener('keydown', onKey)
+
+  // ── protocol ─────────────────────────────────────────────────────────────────────────────────
+
+  function applyVars(vars: Record<string, string>) {
+    const root = doc.documentElement
+    for (const [k, v] of Object.entries(vars || {})) {
+      root.style.setProperty(k, v)
+    }
+  }
+
+  function applyLook(m: Msg) {
+    if (typeof m.dark === 'boolean') {
+      dark = m.dark
+    }
+    if (typeof m.fontSize === 'number') {
+      fontSize = m.fontSize
+    }
+    if (typeof m.wrap === 'boolean') {
+      wrap = m.wrap
+    }
+    applyVars(m.vars)
+    doc.documentElement.style.colorScheme = dark ? 'dark' : 'light'
+    doc.documentElement.style.setProperty('--ide-font-size', fontSize + 'px')
+    if (currentPath) {
+      view.dispatch({ effects: [themeComp.reconfigure(highlight(dark)), wrapComp.reconfigure(wrap ? EditorView.lineWrapping : [])] })
+      files.get(currentPath)!.state = view.state
+    }
+  }
+
+  const handlers: Record<string, (m: Msg) => void> = {
+    look: applyLook,
+    font: m => {
+      try {
+        // The frame's own FontFace: a face built in another realm cannot join this document's set.
+        const face = new (win as any).FontFace(m.family, m.buffer, { style: m.style || 'normal', weight: m.weight || '400' })
+        face.load().then((f: FontFace) => doc.fonts.add(f)).catch(() => undefined)
+      } catch {
+        /* a font we cannot decode keeps the fallback stack */
+      }
+    },
+    open: m => {
+      if (!files.has(m.path) && typeof m.text === 'string') {
+        const eol = m.eol === '\r\n' ? '\r\n' : '\n'
+        const { name, ext } = languageFor(m.path)
+        const savedText = typeof m.saved === 'string' ? m.saved : m.text
+        // Lines split on the file's one separator, so stray endings join the dominant one first.
+        const state = EditorState.create({ doc: normalizeEol(m.text, eol), extensions: extensions(m.path, ext, eol) })
+        const saved = savedText === m.text ? state.doc : Text.of(savedText.split(/\r\n|\r|\n/))
+        files.set(m.path, { state, saved, pendingSave: null, eol, lang: name, wasDirty: !state.doc.eq(saved) })
+        if (!state.doc.eq(saved)) {
+          send({ type: 'dirty', path: m.path, dirty: true })
+        }
+      }
+      if (typeof m.original === 'string') {
+        setDiff(m.path, m.original)
+      }
+      if (m.show !== false) {
+        show(m.path, m.line, m.col)
+      }
+    },
+    show: m => show(m.path, m.line, m.col),
+    close: m => {
+      files.delete(m.path)
+      if (currentPath === m.path) {
+        currentPath = null
+        view.setState(EditorState.create({ doc: '' }))
+        view.dom.style.display = 'none'
+        doc.getElementById('empty')!.style.display = ''
+      }
+    },
+    rename: m => {
+      const f = files.get(m.from)
+      if (f) {
+        files.delete(m.from)
+        files.set(m.to, f)
+        if (currentPath === m.from) {
+          currentPath = m.to
+        }
+      }
+    },
+    replace: m => {
+      replace(m.path, m.text, m.markSaved !== false)
+      if (m.original !== undefined) {
+        setDiff(m.path, m.original)
+      }
+    },
+    setDiff: m => setDiff(m.path, m.original ?? null),
+    saved: m => {
+      const f = files.get(m.path)
+      if (f) {
+        f.saved = f.pendingSave ?? f.state.doc
+        f.pendingSave = null
+        const dirty = !f.state.doc.eq(f.saved)
+        f.wasDirty = dirty
+        send({ type: 'dirty', path: m.path, dirty })
+        send({ type: 'draft', path: m.path, text: dirty ? f.state.sliceDoc() : null })
+      }
+    },
+    saveRequest: m => {
+      const f = files.get(m.path)
+      if (f) {
+        if (m.path === currentPath) {
+          f.state = view.state
+        }
+        f.pendingSave = f.state.doc
+        send({ type: 'save', path: m.path, text: f.state.sliceDoc() })
+      }
+    },
+    inlineEdit: () => view.dispatch({ effects: toggleInline.of(true) }),
+    find: () => openSearchPanel(view),
+    focus: () => view.focus()
+  }
+
+  send({ type: 'ready' })
+
+  return {
+    receive: (m: Msg) => {
+      if (m && typeof m.type === 'string') handlers[m.type]?.(m)
+    },
+    destroy: () => {
+      clearTimeout(draftTimer)
+      clearTimeout(cursorTimer)
+      win.removeEventListener('mousedown', onDown)
+      win.removeEventListener('blur', hideMenu)
+      win.removeEventListener('keydown', onKey)
+      view.destroy()
+    }
+  }
+}

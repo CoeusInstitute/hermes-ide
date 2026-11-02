@@ -7,8 +7,9 @@ literally named ``a..b`` must still open).
 
 The routes run on the machine the agent runs on, so the IDE edits the same files the agent edits,
 including against a remote backend. Trust boundary: the gateway's own authentication. Inside it the
-IDE can reach what the agent's file tools can reach, minus Hermes' credential files, which are
-refused here on every route.
+IDE can reach what the agent's file tools can reach, minus Hermes' credential files (in every
+Hermes home and profile, under any spelling of their path), which every route refuses and no
+listing or search returns.
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ import tempfile
 import threading
 import time
 from collections import deque
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -36,37 +38,66 @@ from fastapi import APIRouter, HTTPException
 # blocks the gateway event loop that every Desktop request shares.
 router = APIRouter()
 
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 MAX_READ_BYTES = 5 * 1024 * 1024
 MAX_LIST_ENTRIES = 5000
 MAX_FILES = 50_000
 MAX_MATCHES = 2000
 SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", ".next", "dist", "build", ".cache"}
-# Credential files under the Hermes home. The agent never needs the IDE to open these.
-SECRET_NAMES = {".env", "auth.json"}
-SECRET_DIRS = {"mcp-tokens", "secrets"}
+# Credential files in a Hermes home (the active one, the default root and every profile under it):
+# .env and its backups, auth.json, OAuth and API tokens, client secrets, app passwords, Honcho's key,
+# key files, and the token folders. Matched at a home's top level and a profile's top level only, so
+# a source tree kept in the home (the hermes-agent checkout's oauth.py) still opens.
+SECRET_RE = re.compile(r"^\.env|^auth\.|token|secret|oauth|credential|password|^honcho\.json|-auth$|\.(pem|key|p12|pfx)$", re.I)
+SECRET_DIRS = {"mcp-tokens", "secrets", "credentials"}
+_CASELESS = sys.platform in ("win32", "darwin")  # file systems that ignore case by default
 
 
-def _hermes_home() -> Path | None:
+def _canon(path: Any) -> str:
+    """One spelling per file: no extended-length or device prefix, symlinks resolved, forward slashes,
+    and lower case where the file system ignores case. Compare these, never raw strings."""
+    s = os.fspath(path)
+    if s[:4] in ("\\\\?\\", "//?/", "\\\\.\\", "//./"):
+        s = s[4:]
+        if s[:4].upper() in ("UNC\\", "UNC/"):
+            s = "//" + s[4:]
+    s = os.path.realpath(s).replace("\\", "/").rstrip("/")
+    return s.lower() if _CASELESS else s
+
+
+def _hermes_roots() -> list[str]:
+    roots: list[Any] = []
     try:
-        from hermes_constants import get_hermes_home
+        import hermes_constants as hc
 
-        return Path(get_hermes_home()).resolve()
+        roots += [hc.get_hermes_home(), hc.get_default_hermes_root()]
     except Exception:
-        env = os.environ.get("HERMES_HOME")
-        return Path(env).resolve() if env else None
+        pass
+    if os.environ.get("HERMES_HOME"):
+        roots.append(os.environ["HERMES_HOME"])
+    roots.append(Path.home() / ".hermes")  # the defaults, so an import failure never fails open
+    if os.environ.get("LOCALAPPDATA"):
+        roots.append(Path(os.environ["LOCALAPPDATA"]) / "hermes")
+    return list(dict.fromkeys(_canon(r) for r in roots))
 
 
-def _is_secret(path: Path) -> bool:
-    home = _hermes_home()
-    if home is None:
-        return False
-    try:
-        rel = path.relative_to(home)
-    except ValueError:
-        return False
-    parts = rel.parts
-    return bool(parts) and (parts[-1] in SECRET_NAMES or any(p in SECRET_DIRS for p in parts))
+def _is_secret(path: Any, roots: list[str] | None = None) -> bool:
+    c = _canon(path)
+    for root in roots if roots is not None else _hermes_roots():
+        if not c.startswith(root + "/"):
+            continue
+        rel = c[len(root) + 1:].split("/")
+        if rel[0] == "profiles" and len(rel) > 2:
+            rel = rel[2:]  # profiles/<name>/... is a home of its own
+        if rel[0] in SECRET_DIRS or (len(rel) == 1 and SECRET_RE.search(rel[0])):
+            return True
+    return False
+
+
+def _may_be_secret(rel: str) -> bool:
+    """Cheap name test before the full check, for listings of thousands of files."""
+    parts = rel.replace("\\", "/").split("/")
+    return bool(SECRET_RE.search(parts[-1])) or any(x.lower() in SECRET_DIRS for x in parts)
 
 
 def resolve_path(raw: Any, *, must_exist: bool = True) -> Path:
@@ -83,6 +114,19 @@ def resolve_path(raw: Any, *, must_exist: bool = True) -> Path:
     if must_exist and not p.exists():
         raise HTTPException(404, "not found")
     return p
+
+
+def resolve_link(raw: Any) -> Path:
+    """Like resolve_path, but a symlink stays the link (rename and trash act on the entry the user
+    clicked, not on what it points to). Both the link and its target must pass the credential check."""
+    target = resolve_path(raw, must_exist=False)
+    p = Path(os.path.expanduser(str(raw).strip()))
+    link = p.parent.resolve(strict=False) / p.name
+    if _is_secret(link):
+        raise HTTPException(403, "refused: Hermes credential file")
+    if not link.exists() and not link.is_symlink():
+        raise HTTPException(404, "not found")
+    return link if link.is_symlink() else target
 
 
 def _stat(p: Path) -> dict[str, Any]:
@@ -107,26 +151,25 @@ def list_dir(path: Path, show_hidden: bool = True) -> dict[str, Any]:
     if not path.is_dir():
         raise HTTPException(400, "not a directory")
     entries = []
-    truncated = False
     with os.scandir(path) as it:
         for e in it:
             if not show_hidden and e.name.startswith("."):
                 continue
-            if len(entries) >= MAX_LIST_ENTRIES:
-                truncated = True
-                break
             try:
                 is_dir = e.is_dir()
             except OSError:
                 is_dir = False
             entries.append({"name": e.name, "path": _posix(Path(e.path)), "dir": is_dir})
+    # Sort first, then cap: folders must not vanish because scandir listed them late.
     entries.sort(key=lambda x: (not x["dir"], x["name"].lower()))
-    return {"path": _posix(path), "entries": entries, "truncated": truncated}
+    return {"path": _posix(path), "entries": entries[:MAX_LIST_ENTRIES], "truncated": len(entries) > MAX_LIST_ENTRIES}
 
 
 def read_file(path: Path) -> dict[str, Any]:
     if path.is_dir():
         raise HTTPException(400, "is a directory")
+    if not path.is_file():
+        raise HTTPException(400, "not a regular file")  # a pipe or device would read forever
     meta = _stat(path)
     base = {"path": _posix(path), **meta, "text": None, "binary": False, "too_large": False}
     if meta["size"] > MAX_READ_BYTES:
@@ -149,6 +192,10 @@ def write_file(path: Path, text: str, expected_mtime: str | None, bom: bool = Fa
             raise HTTPException(400, "is a directory")
         if expected_mtime is not None and _stat(path)["mtime"] != str(expected_mtime):
             raise HTTPException(409, json.dumps({"error": "conflict", **_stat(path)}))
+    elif expected_mtime is not None:
+        # The editor loaded this file and it is gone now (deleted or renamed, often by the agent):
+        # saving would silently bring it back.
+        raise HTTPException(409, json.dumps({"error": "deleted"}))
     elif not path.parent.is_dir():
         raise HTTPException(400, "parent folder does not exist")
     data = (b"\xef\xbb\xbf" if bom else b"") + text.encode("utf-8")
@@ -158,6 +205,8 @@ def write_file(path: Path, text: str, expected_mtime: str | None, bom: bool = Fa
             fh.write(data)
         if path.exists():
             shutil.copymode(path, tmp)
+        elif os.name != "nt":
+            os.chmod(tmp, 0o644)  # mkstemp makes 0600; a new source file should read like any other
         os.replace(tmp, path)
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
@@ -172,9 +221,12 @@ def _trash_windows(path: Path) -> bool:
                     ("pTo", ctypes.c_wchar_p), ("fFlags", ctypes.c_ushort), ("fAnyOperationsAborted", ctypes.c_int),
                     ("hNameMappings", ctypes.c_void_p), ("lpszProgressTitle", ctypes.c_wchar_p)]
 
-    fo_delete, allow_undo, no_ui = 3, 0x40, 0x0010 | 0x0400 | 0x0004  # NOCONFIRMATION|NOERRORUI|SILENT
-    op = SHFILEOPSTRUCTW(None, fo_delete, str(path) + "\0", None, allow_undo | no_ui, 0, None, None)
-    return ctypes.windll.shell32.SHFileOperationW(ctypes.byref(op)) == 0 and not path.exists()
+    # FOF_WANTNUKEWARNING: where the item cannot be recycled (a network drive, a full or disabled
+    # Recycle Bin) Windows asks before deleting it for good instead of silently doing so.
+    fo_delete, allow_undo, no_ui, nuke_warning = 3, 0x40, 0x0010 | 0x0400 | 0x0004, 0x4000
+    op = SHFILEOPSTRUCTW(None, fo_delete, str(path) + "\0", None, allow_undo | no_ui | nuke_warning, 0, None, None)
+    ok = ctypes.windll.shell32.SHFileOperationW(ctypes.byref(op)) == 0
+    return ok and not op.fAnyOperationsAborted and not path.exists()
 
 
 def trash(path: Path) -> None:
@@ -190,10 +242,10 @@ def trash(path: Path) -> None:
         if _trash_windows(path):
             return
     elif sys.platform == "darwin":
-        script = f'tell application "Finder" to delete POSIX file {json.dumps(str(path))}'
-        if subprocess.run(["osascript", "-e", script], capture_output=True).returncode == 0:
+        script = f'tell application "Finder" to delete POSIX file {json.dumps(str(path), ensure_ascii=False)}'
+        if subprocess.run(["osascript", "-e", script], capture_output=True, timeout=60).returncode == 0:
             return
-    elif shutil.which("gio") and subprocess.run(["gio", "trash", str(path)], capture_output=True).returncode == 0:
+    elif shutil.which("gio") and subprocess.run(["gio", "trash", str(path)], capture_output=True, timeout=60).returncode == 0:
         return
     raise HTTPException(501, "no recoverable trash available on this machine; delete it yourself")
 
@@ -215,7 +267,8 @@ def list_files(root: Path, limit: int = MAX_FILES) -> dict[str, Any]:
             files.extend((rel / f).as_posix() for f in filenames)
             if len(files) > limit:
                 break
-    files.sort()
+    roots = _hermes_roots()
+    files = sorted(f for f in files if not (_may_be_secret(f) and _is_secret(root / f, roots)))
     return {"root": _posix(root), "files": files[:limit], "truncated": len(files) > limit}
 
 
@@ -226,6 +279,7 @@ def search(root: Path, query: str, *, regex: bool = False, case: bool = False, g
     if not query:
         return {"matches": [], "truncated": False}
     matches: list[dict[str, Any]] = []
+    roots = _hermes_roots()
     rg = shutil.which("rg")
     if rg:
         args = [rg, "--json", "--hidden", "-g", "!.git", "--max-columns", "300", "--max-count", "200"]
@@ -245,15 +299,18 @@ def search(root: Path, query: str, *, regex: bool = False, case: bool = False, g
                 continue
             d = ev["data"]
             rel = d["path"].get("text", "").replace("\\", "/").removeprefix("./")
+            if _may_be_secret(rel) and _is_secret(root / rel, roots):
+                continue  # a search over a Hermes home must not print its keys
             text = d["lines"].get("text", "").rstrip("\r\n")
-            col = d["submatches"][0]["start"] if d.get("submatches") else 0
+            start = d["submatches"][0]["start"] if d.get("submatches") else 0
+            col = len(text.encode("utf-8")[:start].decode("utf-8", "ignore"))  # rg counts bytes; the editor counts characters
             matches.append({"path": _posix(root / rel), "rel": rel, "line": d["line_number"], "col": col,
                             "text": text[:300]})
             if len(matches) >= limit:
                 break
+        if proc.returncode == 2 and not matches:  # ripgrep's error exit: a bad regex or glob
+            raise HTTPException(400, (proc.stderr or "search failed").strip().splitlines()[-1][:300])
         return {"matches": matches, "truncated": len(matches) >= limit}
-    import re
-
     pat = re.compile(query if regex else re.escape(query), 0 if case else re.IGNORECASE)
     for rel in list_files(root)["files"]:
         p = root / rel
@@ -276,7 +333,9 @@ def search(root: Path, query: str, *, regex: bool = False, case: bool = False, g
 
 
 def _git(cwd: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, timeout=30)
+    # No optional locks: a background status must never hold index.lock while the agent commits.
+    env = {**os.environ, "GIT_OPTIONAL_LOCKS": "0"}
+    return subprocess.run(["git", "-c", "core.fsmonitor=false", *args], cwd=cwd, capture_output=True, timeout=30, env=env)
 
 
 def git_status(root: Path) -> dict[str, Any]:
@@ -312,7 +371,10 @@ def git_head_text(path: Path) -> dict[str, Any]:
     if top.returncode != 0:
         return {"text": None}
     toplevel = Path(top.stdout.decode().strip()).resolve()
-    rel = path.relative_to(toplevel).as_posix()
+    try:
+        rel = path.relative_to(toplevel).as_posix()
+    except ValueError:
+        return {"text": None}
     show = _git(toplevel, "show", f"HEAD:{rel}")
     if show.returncode != 0:
         return {"text": None}
@@ -337,6 +399,13 @@ UI_DEPS = {  # dependency → (framework label, port it usually prints)
     "serve": ("serve", 3000),
 }
 UI_SCRIPTS = ("dev", "start", "serve", "develop", "preview", "storybook")
+# The command each framework's script runs: a dependency alone is no UI (vite used only by vitest).
+UI_BINS = {
+    "next": ("next",), "nuxt": ("nuxt", "nuxi"), "@remix-run/dev": ("remix", "vite"), "@sveltejs/kit": ("vite", "svelte-kit"),
+    "astro": ("astro",), "@angular/cli": ("ng",), "react-scripts": ("react-scripts",), "gatsby": ("gatsby",),
+    "@vue/cli-service": ("vue-cli-service",), "vite": ("vite",), "parcel": ("parcel",), "webpack-dev-server": ("webpack", "webpack-dev-server"),
+    "@storybook/react": ("storybook", "start-storybook"), "live-server": ("live-server",), "http-server": ("http-server",), "serve": ("serve",),
+}
 STATIC_DIRS = ("", "public", "src", "docs", "site", "www", "web", "frontend", "client")
 SCAN_SKIP = SKIP_DIRS | {"out", "coverage", "target", ".turbo", ".svelte-kit", ".output"}
 URL_RE = re.compile(r"https?://(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1?\]|[\w.-]+\.local)(?::\d+)?(?:/[^\s'\"\x1b]*)?")
@@ -383,17 +452,26 @@ def _node_candidate(pkg_dir: Path, root: Path) -> dict[str, Any] | None:
     deps = {**(pkg.get("dependencies") or {}), **(pkg.get("devDependencies") or {})}
     if "electron" in deps and not any(d in deps for d in ("vite", "next", "react-scripts")):
         return None  # a desktop app, not a page a browser can show
+    def runs(cmd: str, dep: str) -> bool:
+        # A meta-framework that runs another tool's command (Remix and SvelteKit run vite) counts
+        # only when it is a dependency; a tool named after its own command may come from elsewhere.
+        bins = [b for b in UI_BINS[dep] if dep in deps or b == dep]
+        return any(re.search(rf"(^|[\s/&;|\"'(]){re.escape(b)}([\s\"');&|]|$)", cmd) for b in bins)
+
     for script in UI_SCRIPTS:
         cmd = scripts.get(script)
-        if not isinstance(cmd, str):
+        if not isinstance(cmd, str) or re.search(r"\belectron\b", cmd):
             continue
-        hit = next(((dep, *UI_DEPS[dep]) for dep in UI_DEPS if dep in deps or re.search(rf"(^|\s|/){re.escape(dep)}(\s|$)", cmd)), None)
+        # One hop through `npm run web` / `pnpm web` / `yarn web` to the script that does the work.
+        via = re.search(r"\b(?:npm run|pnpm(?: run)?|yarn(?: run)?|bun run)\s+([\w:.-]+)", cmd)
+        text = cmd + " " + (scripts.get(via.group(1)) if via and isinstance(scripts.get(via.group(1)), str) else "")
+        hit = next(((dep, *UI_DEPS[dep]) for dep in UI_DEPS if runs(text, dep)), None)
         if not hit:
             continue
         rel = pkg_dir.relative_to(root).as_posix() if pkg_dir != root else ""
         pm = _manager(pkg_dir, root)
         return {"id": f"node:{rel}", "kind": "node", "dir": _posix(pkg_dir), "rel": rel, "name": pkg.get("name") or (rel or root.name),
-                "framework": hit[1], "port": hit[2], "script": script, "manager": pm,
+                "framework": hit[1], "port": hit[2], "script": script, "manager": pm, "run": cmd,
                 "command": f"{pm} run {script}" if pm != "yarn" else f"yarn {script}", "installed": _installed(pkg_dir, root)}
     return None
 
@@ -422,7 +500,7 @@ def detect_projects(root: Path) -> list[dict[str, Any]]:
             d = root / sub if sub else root
             if (d / "index.html").is_file():
                 out.append({"id": f"static:{sub}", "kind": "static", "dir": _posix(d), "rel": sub, "name": sub or root.name,
-                            "framework": "Static site", "port": 0, "command": "python -m http.server", "installed": True})
+                            "framework": "Static site", "port": 0, "command": "static server (127.0.0.1)", "run": "", "installed": True})
                 break
     # Prefer the root project, then names that look like the app (web, frontend, client, ui, site).
     rank = lambda c: (c["rel"] != "", not re.search(r"(^|/)(web|frontend|client|ui|site|app|dashboard)$", c["rel"]), c["rel"])
@@ -473,8 +551,21 @@ def _port_open(url: str) -> bool:
     return False
 
 
+# The gateway's environment holds every provider key Hermes loaded. A project's dev script and every
+# dependency's install script run unreviewed code, so they get the environment minus anything that
+# looks like a credential (the project's own keys belong in its own .env). Registry tokens stay:
+# private-package installs need them and Hermes never sets them.
+_SECRET_ENV = re.compile(r"KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH|COOKIE|^HERMES|^HONCHO|^OPENROUTER", re.I)
+_KEEP_ENV = {"NPM_TOKEN", "NODE_AUTH_TOKEN", "YARN_NPM_AUTH_TOKEN"}
+
+
+def _child_env() -> dict[str, str]:
+    env = {k: v for k, v in os.environ.items() if k.upper() in _KEEP_ENV or not _SECRET_ENV.search(k)}
+    return {**env, "BROWSER": "none", "FORCE_COLOR": "0", "NO_COLOR": "1"}  # BROWSER=none: no system browser tab
+
+
 def _spawn(args: list[str], cwd: str) -> subprocess.Popen:
-    env = {**os.environ, "BROWSER": "none", "FORCE_COLOR": "0", "NO_COLOR": "1"}  # BROWSER=none: no system browser tab
+    env = _child_env()
     kw: dict[str, Any] = {"cwd": cwd, "stdout": subprocess.PIPE, "stderr": subprocess.STDOUT, "stdin": subprocess.DEVNULL, "env": env}
     if sys.platform == "win32":
         kw["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -501,7 +592,9 @@ def _kill_tree(proc: subprocess.Popen | None) -> None:
 
 def _command(cand: dict[str, Any], install: bool) -> list[str]:
     if cand["kind"] == "static":
-        return [sys.executable, "-m", "http.server", str(cand["port"]), "--bind", "127.0.0.1"]
+        # Not `python -m http.server`: that also serves dotfiles (.env, .git) and directory listings
+        # to any Host, which a web page could read through DNS rebinding.
+        return [sys.executable, str(Path(__file__).with_name("static_server.py")), str(cand["port"]), cand["dir"]]
     exe = shutil.which(cand["manager"]) or shutil.which("npm")
     if not exe:
         raise HTTPException(424, f"{cand['manager']} is not installed on the agent's machine")
@@ -531,6 +624,9 @@ def _run(srv: DevServer, install: bool) -> None:
         if install:
             srv.state = "installing"
             srv.proc = _spawn(_command(srv.cand, True), srv.cand["dir"])
+            if srv.stopped:
+                _kill_tree(srv.proc)
+                return
             _pump(srv, srv.proc)
             if srv.proc.wait() != 0 or srv.stopped:
                 srv.state, srv.exit_code = "exited", srv.proc.returncode
@@ -539,6 +635,9 @@ def _run(srv: DevServer, install: bool) -> None:
         if srv.cand["kind"] == "static":
             srv.url = f"http://localhost:{srv.cand['port']}/"
         srv.proc = proc = _spawn(_command(srv.cand, False), srv.cand["dir"])
+        if srv.stopped:  # Stop landed while it was starting: nothing else holds this process
+            _kill_tree(proc)
+            return
         threading.Thread(target=_pump, args=(srv, proc), daemon=True).start()
         guess_at = time.time() + 25  # no URL printed by then: try the framework's usual port
         while proc.poll() is None and not srv.stopped:
@@ -604,9 +703,18 @@ def stale_servers(now: float) -> list[str]:
 
 
 def _reap() -> None:
+    last = time.time()
     while True:
         time.sleep(15)
-        for k in stale_servers(time.time()):
+        now = time.time()
+        if now - last > 60:
+            # The machine slept: nobody could renew a lease meanwhile, so restart every lease
+            # instead of stopping servers whose IDE window is still open.
+            with SERVERS_LOCK:
+                for srv in SERVERS.values():
+                    srv.seen = now
+        last = now
+        for k in stale_servers(now):
             stop_server(k)
 
 
@@ -615,6 +723,24 @@ atexit.register(lambda: [stop_server(k) for k in list(SERVERS)])
 
 
 # ── routes ──────────────────────────────────────────────────────────────────────────────────
+
+
+@contextmanager
+def _os_errors():
+    """The OS's own refusal as a readable 4xx (a locked file, no permission, a slow git) instead of
+    an opaque 500."""
+    try:
+        yield
+    except HTTPException:
+        raise
+    except subprocess.TimeoutExpired as e:
+        raise HTTPException(504, f"{Path(str(e.cmd[0])).name if isinstance(e.cmd, list) else 'command'} took too long ({e.timeout:.0f}s)")
+    except PermissionError as e:
+        raise HTTPException(403, f"permission denied: {e.strerror or e}")
+    except FileNotFoundError as e:
+        raise HTTPException(404, f"not found: {e.filename or e}")
+    except OSError as e:
+        raise HTTPException(409, f"{e.strerror or e}")
 
 
 @router.post("/project/detect")
@@ -658,12 +784,14 @@ def health(body: dict | None = None) -> dict:
 @router.post("/fs/list")
 def fs_list(body: dict) -> dict:
     b = _body(body)
-    return list_dir(resolve_path(b.get("path")), bool(b.get("show_hidden", True)))
+    with _os_errors():
+        return list_dir(resolve_path(b.get("path")), bool(b.get("show_hidden", True)))
 
 
 @router.post("/fs/read")
 def fs_read(body: dict) -> dict:
-    return read_file(resolve_path(_body(body).get("path")))
+    with _os_errors():
+        return read_file(resolve_path(_body(body).get("path")))
 
 
 @router.post("/fs/stat")
@@ -681,8 +809,9 @@ def fs_write(body: dict) -> dict:
     if not isinstance(text, str):
         raise HTTPException(400, "text required")
     expected = b.get("expected_mtime")
-    return write_file(resolve_path(b.get("path"), must_exist=False), text,
-                      None if expected in (None, "") else str(expected), bool(b.get("bom")))
+    with _os_errors():
+        return write_file(resolve_path(b.get("path"), must_exist=False), text,
+                          None if expected in (None, "") else str(expected), bool(b.get("bom")))
 
 
 @router.post("/fs/create")
@@ -693,37 +822,44 @@ def fs_create(body: dict) -> dict:
         raise HTTPException(409, "already exists")
     if not p.parent.is_dir():
         raise HTTPException(400, "parent folder does not exist")
-    if b.get("dir"):
-        p.mkdir()
-    else:
-        with open(p, "x", encoding="utf-8"):
-            pass
+    with _os_errors():
+        if b.get("dir"):
+            p.mkdir()
+        else:
+            with open(p, "x", encoding="utf-8"):
+                pass
     return {"path": _posix(p)}
 
 
 @router.post("/fs/rename")
 def fs_rename(body: dict) -> dict:
     b = _body(body)
-    src = resolve_path(b.get("from"))
-    dst = resolve_path(b.get("to"), must_exist=False)
-    if dst.exists():
+    src = resolve_link(b.get("from"))
+    raw_to = b.get("to")
+    dst = resolve_path(raw_to, must_exist=False)
+    dst = dst.parent / Path(str(raw_to)).name  # keep the new name's spelling (a case-only rename)
+    case_only = dst.exists() and src.exists() and os.path.samefile(src, dst) and src.name != dst.name
+    if dst.exists() and not case_only:
         raise HTTPException(409, "target exists")
     if not dst.parent.is_dir():
         raise HTTPException(400, "target folder does not exist")
-    src.rename(dst)
+    with _os_errors():
+        src.rename(dst)
     return {"path": _posix(dst)}
 
 
 @router.post("/fs/trash")
 def fs_trash(body: dict) -> dict:
-    p = resolve_path(_body(body).get("path"))
-    trash(p)
+    p = resolve_link(_body(body).get("path"))
+    with _os_errors():
+        trash(p)
     return {"ok": True}
 
 
 @router.post("/fs/files")
 def fs_files(body: dict) -> dict:
-    return list_files(resolve_path(_body(body).get("root")))
+    with _os_errors():
+        return list_files(resolve_path(_body(body).get("root")))
 
 
 @router.post("/search")
@@ -743,9 +879,11 @@ def fs_search(body: dict) -> dict:
 
 @router.post("/git/status")
 def route_git_status(body: dict) -> dict:
-    return git_status(resolve_path(_body(body).get("root")))
+    with _os_errors():
+        return git_status(resolve_path(_body(body).get("root")))
 
 
 @router.post("/git/head")
 def route_git_head(body: dict) -> dict:
-    return git_head_text(resolve_path(_body(body).get("path")))
+    with _os_errors():
+        return git_head_text(resolve_path(_body(body).get("path")))

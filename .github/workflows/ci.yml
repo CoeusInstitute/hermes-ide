@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: dev/package-lock.json
+
+      - name: Install build tooling
+        working-directory: dev
+        run: npm ci
+
+      - name: Helper and layout tests
+        working-directory: dev
+        run: npm test
+
+      # The installed plugin runs desktop/plugin.js as committed, so it must be exactly what its source
+      # builds to. Its first line names the target it was built with.
+      - name: Committed bundle matches its source
+        run: |
+          if head -1 desktop/plugin.js | grep -q "(full build)"; then target=full; else target=catalog; fi
+          echo "desktop/plugin.js holds the $target build"
+          node dev/build.mjs --target=$target
+          git diff --stat --exit-code -- desktop/plugin.js
+
+      - name: The other target builds too
+        run: |
+          node dev/build.mjs --target=full
+          node dev/build.mjs --target=catalog
+          git checkout -- desktop/plugin.js
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Backend tests
+        run: uv run --python 3.11 --with pytest --with fastapi --with httpx python -m pytest tests -q

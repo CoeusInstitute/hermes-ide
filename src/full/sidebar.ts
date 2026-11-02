@@ -1,28 +1,15 @@
-// Main window: IDE chats get their own group under SESSIONS, like the date groups.
+// Full build only: IDE chats get their own group under SESSIONS, like the date groups.
 //
 // shortcut: the SDK has no door to add a group to the session list, so the group is a plain-DOM
 // block inserted under the SESSIONS header (plugins get no react-dom for a portal), anchored on the
-// list's own stable drop-target attributes. The IDE chats' rows in the date groups are hidden while
-// the group is shown; anywhere else (Pinned, projects, search) they stay, with the IDE badge from
-// the SDK's sessionRow slot, and open the IDE window when clicked. Upgrade to a session-list group
-// door when the SDK ships one. If the anchors move, the group simply does not appear and nothing
-// is hidden: the badges and the click still work.
+// list's own stable drop-target attributes, and the IDE chats' rows in the date groups are hidden
+// while the group is shown. That reaches into the app's markup, outside the catalog's SDK surface
+// (rule 8), so the catalog build lists IDE chats in the status bar's IDE menu instead. Upgrade to a
+// session-list group door when the SDK ships one. If the anchors move, the group simply does not
+// appear and nothing is hidden: the badges and the click still work.
 
-import { host } from '@hermes/plugin-sdk'
-
-import { $ideChats, ctx, loadIdeChats, notify, openIdeWindow, setIdeChats, unmarkIdeChat } from './core'
-
-interface Row {
-  id: string
-  _lineage_root_id?: string | null
-  title?: string | null
-  preview?: string | null
-  model?: string | null
-  message_count?: number
-  last_active?: number
-  started_at?: number
-  archived?: boolean
-}
+import { $ideChats, ctx, openIdeWindow, unmarkIdeChat } from '../core'
+import { $sessionRows, age, durable, ideRows, matches, startNewIdeChat } from '../ide-chats'
 
 const CSS = `
 .hi-sb{margin:2px 0 4px}
@@ -32,7 +19,7 @@ const CSS = `
 .hi-sb-count{flex:none;font-size:.6rem;color:var(--ui-text-quaternary)}
 .hi-sb-rule{height:1px;min-width:16px;flex:1;background:var(--ui-stroke-tertiary)}
 .hi-sb-add{display:grid;place-items:center;width:18px;height:18px;border:0;border-radius:4px;background:none;color:var(--ui-text-tertiary);cursor:pointer;opacity:0;transition:opacity .12s}
-.hi-sb:hover .hi-sb-add{opacity:1}
+.hi-sb:hover .hi-sb-add,.hi-sb-add:focus-visible{opacity:1}
 .hi-sb-add:hover{background:var(--ui-control-hover-background);color:var(--ui-text-primary)}
 .hi-sb-row{position:relative;display:flex;align-items:center;gap:8px;min-height:44px;padding:4px 8px;border-radius:6px;cursor:pointer;color:var(--ui-text-secondary)}
 .hi-sb-row:hover{background:var(--ui-row-hover-background);color:var(--ui-text-primary)}
@@ -43,22 +30,16 @@ const CSS = `
 .hi-sb-meta{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:2px;font-size:.625rem;color:var(--ui-text-tertiary)}
 .hi-sb-age{flex:none;font-size:.625rem;color:var(--ui-text-tertiary)}
 .hi-sb-x{display:none;place-items:center;width:20px;height:20px;border:0;border-radius:4px;background:none;color:var(--ui-text-tertiary);cursor:pointer;flex:none}
-.hi-sb-row:hover .hi-sb-x{display:grid}
+.hi-sb-row:hover .hi-sb-x,.hi-sb-row:focus-within .hi-sb-x{display:grid}
 .hi-sb-row:hover .hi-sb-age{display:none}
 .hi-sb-x:hover{background:var(--ui-control-hover-background);color:var(--ui-text-primary)}
 .hi-sb-empty{padding:4px 10px 8px 32px;font-size:.6875rem;color:var(--ui-text-tertiary)}
 .hi-ide-hidden{display:none !important}
-.hi-ide-badge{display:inline-flex;align-items:center;height:14px;padding:0 4px;margin:0 3px 0 1px;border-radius:4px;font-size:9px;font-weight:700;letter-spacing:.05em;line-height:1;color:var(--ui-accent);background:color-mix(in srgb,var(--ui-accent) 16%,transparent);flex:none;align-self:center}
 `
 
-let rows: Row[] = []
-let known = new Set<string>()
 let group: HTMLDivElement | null = null
 let collapsed = false
 let disposed = false // a frame queued before dispose must not put this instance's group back
-
-const durable = (r: Row) => r._lineage_root_id || r.id
-const matches = (r: Row, id: string) => r.id === id || r._lineage_root_id === id
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls: string, text?: string): HTMLElementTagNameMap[K] {
   const n = document.createElement(tag)
@@ -69,55 +50,17 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls: string, text?: s
 
 const codicon = (name: string) => el('span', `codicon codicon-${name}`)
 
-function age(sec?: number): string {
-  if (!sec) return ''
-  const m = Math.max(0, (Date.now() / 1000 - sec) / 60)
-  return m < 1 ? 'now' : m < 60 ? `${Math.floor(m)}m` : m < 1440 ? `${Math.floor(m / 60)}h` : `${Math.floor(m / 1440)}d`
-}
-
 let pinnedKey = ''
 
-/** IDE chats pinned right now: their badge sits in the Pinned section. */
+/** IDE chats pinned right now: their badge sits in the Pinned section. (Pinned shows those; the
+ *  backend's flag lags a pin or unpin until the next refresh, which would drop an unpinned chat
+ *  from both lists in between.) */
 const pinnedNow = () => new Set([...document.querySelectorAll<HTMLElement>('[data-session-pin-drop] .hi-ide-badge[data-ide-sid]')].map(b => b.dataset.ideSid!))
-
-/** IDE chats to list: known to the backend, not archived, not pinned (Pinned shows those). Pin
- *  state comes from the Pinned section itself: the backend's flag lags a pin or unpin until the
- *  next refresh, which would drop an unpinned chat from both lists in between. */
-function ideRows(): Row[] {
-  const chats = $ideChats.get()
-  const pinned = pinnedNow()
-  return rows
-    .filter(r => !r.archived && !pinned.has(durable(r)) && Object.keys(chats).some(id => matches(r, id)))
-    .sort((a, b) => (b.last_active || b.started_at || 0) - (a.last_active || a.started_at || 0))
-}
-
-async function refresh() {
-  try {
-    const profile = host.state.profile.get() || 'default'
-    const r: any = await host.listPersistedSessions(null, { profile, limit: 500 })
-    rows = Array.isArray(r?.sessions) ? r.sessions : []
-  } catch {
-    return // backend restarting: keep what we have
-  }
-  known = new Set(rows.flatMap(r => [r.id, durable(r)]))
-  // Key IDE chats by their durable id, the one the row badge sees and that survives compaction.
-  loadIdeChats()
-  const chats = $ideChats.get()
-  let changed = false
-  const next: Record<string, number> = {}
-  for (const [id, at] of Object.entries(chats)) {
-    const row = rows.find(r => matches(r, id))
-    const key = row ? durable(row) : id
-    if (key !== id) changed = true
-    next[key] = Math.max(next[key] || 0, at)
-  }
-  if (changed) setIdeChats(next)
-  render()
-}
 
 function render() {
   if (!group) return
-  const list = ideRows()
+  const pinned = pinnedNow()
+  const list = ideRows().filter(r => !pinned.has(durable(r)))
   group.replaceChildren()
   const head = el('div', 'hi-sb-head')
   const label = el('button', 'hi-sb-label')
@@ -134,7 +77,10 @@ function render() {
   add.type = 'button'
   add.title = 'New IDE chat: opens in the IDE after your first message'
   add.append(codicon('add'))
-  add.onclick = startNewIdeChat
+  add.onclick = e => {
+    e.stopPropagation()
+    startNewIdeChat()
+  }
   head.append(label, add)
   group.append(head)
   if (collapsed) return
@@ -184,14 +130,18 @@ function sync() {
     group!.remove()
   }
   const mounted = !!recents && group!.isConnected
+  // Hide a date-group row only when the group lists that chat: a chat the group could not load
+  // (the list failed, or it is older than the 500 rows fetched) must not vanish from both.
+  const listed = new Set([...group!.querySelectorAll<HTMLElement>('.hi-sb-row[data-sid]')].map(r => r.dataset.sid!))
   for (const badge of document.querySelectorAll<HTMLElement>('.hi-ide-badge[data-ide-sid]')) {
-    if (!mounted || !recents!.contains(badge)) continue
+    if (!mounted || !recents!.contains(badge) || !listed.has(badge.dataset.ideSid!)) continue
     // Virtualized rows sit in [data-index] wrappers; a short list's rows are the content's children.
     const wrapper = badge.closest<HTMLElement>('[data-index]') ?? climbTo(badge, recents!)
     wrapper?.classList.add('hi-ide-hidden')
   }
   for (const hidden of document.querySelectorAll<HTMLElement>('.hi-ide-hidden')) {
-    if (!mounted || !hidden.querySelector('.hi-ide-badge')) hidden.classList.remove('hi-ide-hidden')
+    const sid = hidden.querySelector<HTMLElement>('.hi-ide-badge')?.dataset.ideSid
+    if (!mounted || !sid || !listed.has(sid)) hidden.classList.remove('hi-ide-hidden')
   }
   const key = [...pinnedNow()].sort().join()
   if (key !== pinnedKey) {
@@ -205,17 +155,6 @@ function climbTo(node: HTMLElement, recents: HTMLElement): HTMLElement | null {
   let n: HTMLElement | null = node
   while (n && n.parentElement && n.parentElement.parentElement !== recents) n = n.parentElement
   return n && n.parentElement && n.parentElement !== group ? n : null
-}
-
-let pendingNewSince = 0
-
-/** "+" on the group: a new chat that opens in the IDE as soon as it exists (after its first
- *  message; a draft has no session yet). */
-function startNewIdeChat(e: MouseEvent) {
-  e.stopPropagation()
-  pendingNewSince = Date.now()
-  host.newChat(host.state.profile.get() || null)
-  notify('info', 'Send the first message; this chat then opens in the IDE.', 'Hermes IDE')
 }
 
 export function initSidebar() {
@@ -238,43 +177,17 @@ export function initSidebar() {
     })
   })
   obs.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-sessions-mode'] })
-
-  const onStorage = (e: StorageEvent) => {
-    if (e.key === 'hermes.plugin.hermes-ide.ideChats') {
-      loadIdeChats()
-      void refresh()
-    }
-  }
-  window.addEventListener('storage', onStorage)
-  window.addEventListener('focus', refresh)
-  const tick = window.setInterval(refresh, 60_000)
+  const offRows = $sessionRows.subscribe(() => render())
   const offChats = $ideChats.subscribe(() => {
     render()
     sync()
   })
-  // An IDE chat's turn can retitle it; other chats' turns do not touch this group.
-  const offTurn = host.onEvent?.('message.complete', (ev: any) => {
-    const sid = ev?.payload?.session_id ?? ev?.session_id
-    if (!sid || Object.keys($ideChats.get()).some(id => id === sid || rows.some(r => matches(r, id) && matches(r, sid)))) void refresh()
-  })
-  const offFocus = host.state.focusedStoredSessionId.subscribe((id: string | null) => {
-    // The "+" chat just got its session: a brand-new id, not one the list already had.
-    if (pendingNewSince && id && !known.has(id)) {
-      if (Date.now() - pendingNewSince < 30 * 60_000) void openIdeWindow({ sid: id })
-      pendingNewSince = 0
-    }
-  })
-  void refresh()
 
   ctx.onDispose(() => {
     disposed = true
     obs.disconnect()
-    window.removeEventListener('storage', onStorage)
-    window.removeEventListener('focus', refresh)
-    clearInterval(tick)
+    offRows()
     offChats()
-    offTurn?.()
-    offFocus()
     group?.remove()
     for (const hidden of document.querySelectorAll('.hi-ide-hidden')) hidden.classList.remove('hi-ide-hidden')
     style.remove()

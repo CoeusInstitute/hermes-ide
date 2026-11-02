@@ -1,10 +1,12 @@
-// The IDE's Browser column: finds the project's web UI, runs it through the backend's dev-server
-// manager, and points the column's webview at it. The element picker sends what the user picks
-// (selector, markup, styles and the source lines that likely render it) to the chat.
+// The project's UI: finds the project's web UI, runs it through the backend's dev-server manager,
+// and shows its page: in the full build's own Browser column, or (catalog build) in the app's
+// Browser pane, reached only through ctx.preview with the user's per-site consent. The element
+// picker sends what the user picks (selector, markup, styles and the source lines that likely
+// render it) to the chat.
 
 import { atom, host } from '@hermes/plugin-sdk'
 
-import { $root, $runUiRequest, $settings, call, ctx, isMissingBackend, notify, openInBrowser, openTile } from './core'
+import { $root, $runAttention, $runUiRequest, $settings, $view, call, ctx, isMissingBackend, notify, openInBrowser, openTile } from './core'
 import { fileRef, isInside, pathKey } from './util'
 
 export interface Candidate {
@@ -15,6 +17,8 @@ export interface Candidate {
   name: string
   framework: string
   command: string
+  /** The package.json script text the command runs ('' for a static site). */
+  run?: string
   installed: boolean
 }
 
@@ -40,13 +44,28 @@ export const $backendStale = atom(false)
 
 const selected = () => $candidates.get().find(c => c.id === $selected.get()) ?? null
 
+/** A trusted project is the folder AND what it runs: when its dev script changes (a pull, an agent
+ *  edit), the IDE asks again before running it. */
+export const trustKey = (c: Pick<Candidate, 'dir' | 'command' | 'run'>) => `${pathKey(c.dir)}\n${c.command}\n${c.run ?? ''}`
+
+export const $trusted = atom<string[]>([])
+
 function trusted(): string[] {
   const v = ctx.storage.get('trustedProjects', [])
-  return Array.isArray(v) ? v : []
+  // Keys from before v0.4 named only the folder: they no longer match, so those projects ask once.
+  return Array.isArray(v) ? v.filter(k => typeof k === 'string' && k.includes('\n')) : []
 }
 
 export function trust(c: Candidate) {
-  ctx.storage.set('trustedProjects', [...new Set([...trusted(), pathKey(c.dir)])])
+  const next = [...new Set([...trusted(), trustKey(c)])]
+  ctx.storage.set('trustedProjects', next)
+  $trusted.set(next)
+}
+
+export function revokeTrust(key: string) {
+  const next = trusted().filter(k => k !== key)
+  ctx.storage.set('trustedProjects', next)
+  $trusted.set(next)
 }
 
 let detectedFor = ''
@@ -62,10 +81,13 @@ export async function detectProject(force = false) {
     r = await call('/project/detect', { root })
     $backendStale.set(false)
   } catch (e) {
-    // The rest of the backend answers but this route does not: an update the gateway has not loaded.
-    if (isMissingBackend(e)) $backendStale.set(true)
+    detectedFor = '' // try again next time (a gateway restart, a folder that comes back)
+    // FastAPI's "Not Found" is a route this gateway does not have: an update it has not loaded.
+    // (A missing folder is this plugin's own lower-case "not found".)
+    if (isMissingBackend(e) && /Not Found/.test(String((e as Error)?.message ?? e))) $backendStale.set(true)
     return
   }
+  if (pathKey($root.get() ?? '') !== pathKey(root)) return // the folder changed while we asked
   $candidates.set(r.candidates)
   const running = r.servers.find(s => s.state !== 'exited')
   const first = r.candidates.find(c => c.id === running?.id) ?? r.candidates[0]
@@ -73,16 +95,35 @@ export async function detectProject(force = false) {
   $askTrust.set(null)
   if (running) {
     track(running)
-    openTile('browser')
+    showFound()
     return
   }
   if (!first) return
-  if (trusted().includes(pathKey(first.dir)) && $settings.get().autoRunUi && first.installed) {
+  if (trusted().includes(trustKey(first)) && $settings.get().autoRunUi && first.installed) {
     void startUi()
     return
   }
   $askTrust.set(first)
-  openTile('browser')
+  showFound(first)
+}
+
+/** A project UI was found. The full build opens its Browser column; the catalog build marks the
+ *  Explorer panel's Run view and says so, without taking the panel from the files the user is on. */
+function showFound(c?: Candidate) {
+  if (!__CATALOG__) {
+    openTile('browser')
+    return
+  }
+  if ($view.get() === 'run') return
+  $runAttention.set(true)
+  if (c) {
+    host.notify({
+      kind: 'info',
+      title: 'Hermes IDE',
+      message: `Found ${c.kind === 'static' ? 'a static site' : `a ${c.framework} app`}${c.rel ? ` in ${c.rel}` : ''}.`,
+      action: { label: 'Show', onClick: () => openTile('browser') }
+    })
+  }
 }
 
 export async function startUi(install = false) {
@@ -148,6 +189,7 @@ function track(s: Server) {
 }
 
 export function initBrowser() {
+  $trusted.set(trusted())
   ctx.onDispose($root.subscribe(() => void detectProject()))
   ctx.onDispose($runUiRequest.subscribe((n: number) => n && void (selected() ? startUi() : detectProject(true))))
   ctx.onDispose(() => clearInterval(poll))
@@ -222,17 +264,67 @@ export interface Picked {
 
 export const $picking = atom(false)
 
-export async function pickElement(webview: any) {
-  if (!webview || $picking.get()) return
+/** Pick an element: in the full build's own column (`webview`), else in the app's Browser pane
+ *  through ctx.preview (the app asks the user once per site before any script runs there). */
+// Ends a pick in the page: the picker script listens for Escape.
+const CANCEL_PICK = "dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })); true"
+let cancelPick: (() => void) | null = null
+
+/** Pick an element (or, while a pick is running, cancel it). */
+export async function pickElement(webview?: any) {
+  if ($picking.get()) {
+    cancelPick?.()
+    return
+  }
+  let run: ((code: string) => Promise<unknown>) | null = null
+  if (!__CATALOG__ && webview) {
+    run = code => {
+      webview.focus()
+      return webview.executeJavaScript(code, true)
+    }
+  } else if (ctx.preview?.executeJavaScript) {
+    if (!ctx.preview.isAvailable?.()) {
+      notify('info', 'Open the page in the Browser pane first (the link in the Project UI column), then pick.', 'Hermes IDE')
+      return
+    }
+    run = code => ctx.preview.executeJavaScript(code)
+    notify('info', 'Click an element in the Browser pane (Esc cancels).', 'Hermes IDE')
+  }
+  if (!run) return
   $picking.set(true)
+  const go = run
+  // A page that navigates mid-pick can leave the script's promise pending: a cancel or two minutes
+  // ends the pick either way.
+  const stopped = new Promise<null>(resolve => {
+    const timer = setTimeout(() => resolve(null), 120_000)
+    cancelPick = () => {
+      clearTimeout(timer)
+      void go(CANCEL_PICK).catch(() => undefined)
+      resolve(null)
+    }
+  })
   try {
-    webview.focus()
-    const picked = (await webview.executeJavaScript(PICKER, true)) as Picked | null
+    const picked = (await Promise.race([go(PICKER), stopped])) as Picked | null
     if (picked) await sendPicked(picked)
   } catch (e) {
     notify('error', `Could not pick from this page: ${(e as Error).message}`, 'Hermes IDE')
   } finally {
+    cancelPick = null
     $picking.set(false)
+  }
+}
+
+/** Catalog build: reload the page in the app's Browser pane (after a change the dev server does not
+ *  hot-reload). Same consent as the picker. */
+export async function reloadPreview() {
+  if (!ctx.preview?.isAvailable?.()) {
+    notify('info', 'No page is open in the Browser pane.', 'Hermes IDE')
+    return
+  }
+  try {
+    await ctx.preview.executeJavaScript('location.reload(); true')
+  } catch (e) {
+    notify('error', `Could not reload the page: ${(e as Error).message}`, 'Hermes IDE')
   }
 }
 

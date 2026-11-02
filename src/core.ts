@@ -3,11 +3,12 @@
 
 import { atom, host } from '@hermes/plugin-sdk'
 
+import type { EditorFrame } from './frame/editor'
+import { fitColumns, fullSaveLayout, fullWindowSetup } from './full/layout'
 import {
   baseName,
   columnPlan,
   type ColumnId,
-  columnWidths,
   DEFAULT_LAYOUT,
   detectEol,
   type DockStep,
@@ -115,7 +116,9 @@ export const $tabs = atom<Tab[]>([])
 export const $active = atom<string | null>(null)
 export const $cursor = atom<null | { line: number; col: number; sel: number; lang: string; eol: string }>(null)
 export const $git = atom<GitState>({ repo: false, files: {} })
-export const $view = atom<'explorer' | 'search' | 'scm'>('explorer')
+export const $view = atom<'explorer' | 'search' | 'scm' | 'run'>('explorer')
+/** Catalog build: a project UI was found while the Run view was not showing (a dot on its tab). */
+export const $runAttention = atom(false)
 export const $banners = atom<Record<string, Banner>>({})
 export const $treeVersion = atom(0)
 export const $reveal = atom<string | null>(null)
@@ -141,31 +144,34 @@ export const bumpTree = () => $treeVersion.set($treeVersion.get() + 1)
 
 // ── editor frame bridge ──────────────────────────────────────────────────────────────────────
 
-let frameWin: Window | null = null
+// The editor runs in a child document (src/frame/editor.ts); messages cross in both directions on a
+// microtask, so a reply never re-enters the sender mid-loop (the ordering postMessage gave).
+let frame: EditorFrame | null = null
 let frameReady = false
-let queue: Array<[any, Transferable[] | undefined]> = []
+let queue: any[] = []
 let fonts: Array<{ family: string; weight: string; style: string; buffer: ArrayBuffer }> | null = null
 let lookSource: (() => { vars: Record<string, string>; dark: boolean }) | null = null
 let lastLook = ''
 
-export function attachFrame(win: Window | null, look: () => { vars: Record<string, string>; dark: boolean }) {
-  frameWin = win
+export function attachFrame(f: EditorFrame, look: () => { vars: Record<string, string>; dark: boolean }) {
+  frame = f
   frameReady = false
   lookSource = look
 }
 
-export function detachFrame(win: Window | null) {
-  if (frameWin === win) {
-    frameWin = null
+export function detachFrame(f: EditorFrame | null) {
+  if (f && frame === f) {
+    frame = null
     frameReady = false
   }
 }
 
-export function post(msg: any, transfer?: Transferable[]) {
-  if (frameWin && frameReady) {
-    frameWin.postMessage(msg, '*', transfer)
+export function post(msg: any) {
+  const f = frame
+  if (f && frameReady) {
+    queueMicrotask(() => frame === f && f.receive(msg))
   } else {
-    queue.push([msg, transfer])
+    queue.push(msg)
   }
 }
 
@@ -183,7 +189,7 @@ export function postLook() {
 }
 
 /** The app's mono font files, read once from its own @font-face rules and handed to the frame
- *  (an opaque-origin document cannot load the app's font URLs itself). */
+ *  (its document does not carry the app's @font-face rules). */
 async function appFonts(): Promise<typeof fonts> {
   if (fonts) {
     return fonts
@@ -235,8 +241,7 @@ async function onFrameReady() {
   postLook()
   setTimeout(postLook, 1500) // the app may still be applying its skin during startup
   for (const f of (await appFonts()) || []) {
-    const buffer = f.buffer.slice(0)
-    post({ type: 'font', family: f.family, weight: f.weight, style: f.style, buffer }, [buffer])
+    post({ type: 'font', family: f.family, weight: f.weight, style: f.style, buffer: f.buffer.slice(0) })
   }
   const active = $active.get()
   for (const tab of $tabs.get()) {
@@ -245,9 +250,9 @@ async function onFrameReady() {
       post({ type: 'open', path: m.path, text: m.draft ?? m.savedText, saved: m.savedText, eol: m.eol, show: false })
     }
   }
-  for (const [msg, transfer] of pending) {
+  for (const msg of pending) {
     if (msg.type !== 'look' && msg.type !== 'font') {
-      post(msg, transfer)
+      post(msg)
     }
   }
   if (active && meta.has(pathKey(active))) {
@@ -255,11 +260,12 @@ async function onFrameReady() {
   }
 }
 
-export function onFrameMessage(e: MessageEvent) {
-  if (!frameWin || e.source !== frameWin || !e.data || typeof e.data.type !== 'string') {
+/** A message from the editor frame `f` (stale frames, from a document the app already replaced,
+ *  are ignored). */
+export function onFrameMessage(f: EditorFrame, m: any) {
+  if (!frame || f !== frame || !m || typeof m.type !== 'string') {
     return
   }
-  const m = e.data
   switch (m.type) {
     case 'ready':
       void onFrameReady()
@@ -304,12 +310,21 @@ export function onFrameMessage(e: MessageEvent) {
 // column to any edge of another (the app's FancyZones engine) or stacks it as a tab, exactly like
 // the app's own panes. The arrangement is saved and rebuilt when the IDE window opens.
 
-const TILE_TITLE: Record<TileId, string> = { explorer: 'Explorer', editor: 'Editor', browser: 'Browser' }
+const TILE_TITLE: Record<TileId, string> = { explorer: 'Explorer', editor: 'Editor', browser: __CATALOG__ ? 'Project UI' : 'Browser' }
 const TILE_MIN: Record<TileId, string> = { explorer: '13rem', editor: '24rem', browser: '22rem' }
 const closers = new Map<TileId, () => void>()
 let disposing = false
 
 export const $openTiles = atom<TileId[]>([])
+
+/** Catalog build: the Explorer is a panel inside the Editor column (with its own resizable split),
+ *  not a column of its own. The app splits a newly docked column evenly and the SDK cannot size it,
+ *  which would make a separate Explorer a quarter of the window every time. */
+export const $explorerPanel = atom(true)
+const inEditor = (id: TileId) => __CATALOG__ && id === 'explorer'
+/** Catalog build: the project UI is the Explorer panel's Run view, not a column. Its page shows in
+ *  the app's own Browser pane, so a column of controls would only take a zone the SDK cannot size. */
+const inRunView = (id: TileId) => __CATALOG__ && id === 'browser'
 
 /** Each IDE window keeps its own arrangement (several can be open, and they must not overwrite
  *  each other); the last one saved anywhere is the template for a chat that has none yet. */
@@ -319,7 +334,7 @@ function readPerChat<T>(key: string): T | null {
   return (ctx.storage.get(perChat(key), null) as T | null) ?? (ctx.storage.get(key, null) as T | null)
 }
 
-function writePerChat(key: string, value: unknown) {
+export function writePerChat(key: string, value: unknown) {
   ctx.storage.set(perChat(key), value)
   ctx.storage.set(key, value)
 }
@@ -329,20 +344,35 @@ function savedTiles(): TileId[] {
   return Array.isArray(v) ? TILE_IDS.filter(id => v.includes(id)) : ['explorer', 'editor']
 }
 
-function noteTiles() {
-  const open = TILE_IDS.filter(id => closers.has(id))
+export function noteTiles() {
+  const open = TILE_IDS.filter(isTileOpen)
   $openTiles.set(open)
-  if (!disposing) writePerChat('tiles', open)
+  // Not while the window is still rebuilding (or tearing down) its columns: a half-built list
+  // written then would become the chat's saved columns.
+  if (!disposing && layoutState.ready) writePerChat('tiles', open)
 }
 
-export function isTileOpen(id: TileId) {
-  return closers.has(id)
+export function isTileOpen(id: TileId): boolean {
+  if (inRunView(id)) return isTileOpen('explorer') && $view.get() === 'run'
+  return inEditor(id) ? closers.has('editor') && $explorerPanel.get() : closers.has(id)
 }
 
 /** Open (or front) one column. Without an explicit dock it goes where the saved arrangement puts it. */
 export function openTile(id: TileId, dock?: DockStep['dock']) {
   // The IDE lives only in its own pop-out window; the main window keeps its normal chat layout.
   if (!IDE_WINDOW || !renderers) {
+    return
+  }
+  if (inRunView(id)) {
+    $view.set('run')
+    $runAttention.set(false)
+    openTile('explorer')
+    return
+  }
+  if (inEditor(id)) {
+    $explorerPanel.set(true)
+    openTile('editor')
+    noteTiles()
     return
   }
   if (closers.has(id)) {
@@ -363,7 +393,7 @@ export function openTile(id: TileId, dock?: DockStep['dock']) {
       render: renderers[id],
       onClose: () => {
         closers.delete(id)
-        if (id === 'editor') detachFrame(frameWin)
+        if (id === 'editor') detachFrame(frame)
         noteTiles()
       }
     })
@@ -372,11 +402,21 @@ export function openTile(id: TileId, dock?: DockStep['dock']) {
 }
 
 export function closeTile(id: TileId) {
+  if (inRunView(id)) {
+    if ($view.get() === 'run') $view.set('explorer')
+    noteTiles()
+    return
+  }
+  if (inEditor(id)) {
+    $explorerPanel.set(false)
+    noteTiles()
+    return
+  }
   closers.get(id)?.()
 }
 
 export function toggleTile(id: TileId) {
-  if (closers.has(id)) closeTile(id)
+  if (isTileOpen(id)) closeTile(id)
   else openTile(id)
 }
 
@@ -413,7 +453,16 @@ export async function openFile(path: string, opts: { line?: number; col?: number
   try {
     r = await call('/fs/read', { path })
   } catch (e) {
-    notify('error', `Could not open ${baseName(path)}: ${(e as Error).message}`)
+    const msg = String((e as Error).message)
+    if (/\b404\b/.test(msg) && existing) {
+      // A tab kept from an earlier session whose file is gone (deleted or renamed outside the IDE):
+      // close it instead of raising the same error every time the window opens.
+      setTabs($tabs.get().filter(t => t !== existing))
+      if ($active.get() === existing.path) $active.set($tabs.get()[0]?.path ?? null)
+      notify('info', `${baseName(path)} no longer exists, so its tab was closed.`)
+      return
+    }
+    notify('error', `Could not open ${baseName(path)}: ${msg}`)
     return
   }
   if (r.binary || r.too_large) {
@@ -425,8 +474,13 @@ export async function openFile(path: string, opts: { line?: number; col?: number
     }
     return
   }
-  const draft = drafts()[pathKey(r.path)]
-  meta.set(pathKey(r.path), { path: r.path, mtime: r.mtime, eol: detectEol(r.text), bom: !!r.bom, savedText: r.text, draft })
+  const saved = drafts()[pathKey(r.path)]
+  const draft = saved?.t ?? null
+  // The draft was typed against an older version of the file (the agent wrote since): keep both
+  // and ask, and keep the draft's base mtime so a save before answering is refused, not silent.
+  const stale = draft != null && !!saved?.m && saved.m !== r.mtime && draft !== r.text
+  meta.set(pathKey(r.path), { path: r.path, mtime: stale ? saved!.m! : r.mtime, eol: detectEol(r.text), bom: !!r.bom, savedText: r.text, draft })
+  if (stale) setBanner(r.path, { kind: 'conflict', diskText: r.text, diskMtime: r.mtime })
   let tabs = $tabs.get().filter(t => pathKey(t.path) !== key)
   if (opts.preview) {
     const old = tabs.find(t => t.preview && !t.dirty)
@@ -522,7 +576,12 @@ async function saveText(path: string, text: string) {
     post({ type: 'setDiff', path: m.path, original: null })
     scheduleRefresh()
   } catch (e) {
-    if (isConflict(e)) {
+    if (isConflict(e) && /deleted/.test(String((e as Error).message))) {
+      // Deleted or renamed on disk since it was opened (often by the agent). Keep the text; a
+      // second save writes it back on purpose.
+      m.forceNext = true
+      notify('warning', `${baseName(path)} was deleted or renamed on disk. Save again to write it back.`)
+    } else if (isConflict(e)) {
       const disk = await call('/fs/read', { path: m.path })
       setBanner(m.path, { kind: 'conflict', diskText: disk.text ?? '', diskMtime: disk.mtime })
     } else {
@@ -568,18 +627,63 @@ export async function syncFromDisk(onlyPaths?: string[], fromAgent = false) {
       }
       continue
     }
-    if (tab.dirty) {
+    // Dirty now, not when the loop started: a keystroke during the two reads above must win.
+    if ($tabs.get().find(t => pathKey(t.path) === pathKey(m.path))?.dirty) {
       setBanner(m.path, { kind: 'conflict', diskText: disk.text, diskMtime: disk.mtime })
       continue
     }
-    const before = m.savedText
+    // Several edits in one turn: the review compares against the text before the first of them.
+    const prev = $banners.get()[m.path]
+    const before = prev?.kind === 'agent' ? prev.before : m.savedText
     m.mtime = disk.mtime
     m.savedText = disk.text
-    const review = fromAgent && $settings.get().reviewAgentEdits
+    const review = (fromAgent || prev?.kind === 'agent') && $settings.get().reviewAgentEdits
     post({ type: 'replace', path: m.path, text: disk.text, original: review ? before : null })
     if (review) {
       setBanner(m.path, { kind: 'agent', before })
     }
+  }
+}
+
+/** A file or folder was renamed on disk: open tabs at or inside it follow it, keeping unsaved
+ *  edits, undo history and drafts. */
+export function movedOnDisk(from: string, to: string) {
+  const fk = pathKey(from)
+  const moved = (p: string) => {
+    const k = pathKey(p)
+    return k === fk ? normPath(to) : k.startsWith(fk + '/') ? normPath(to) + normPath(p).slice(normPath(from).length) : null
+  }
+  const banners = { ...$banners.get() }
+  const tabs = $tabs.get().map(t => {
+    const np = moved(t.path)
+    if (!np) return t
+    const m = meta.get(pathKey(t.path))
+    if (m) {
+      meta.delete(pathKey(t.path))
+      post({ type: 'rename', from: m.path, to: np })
+      m.path = np
+      meta.set(pathKey(np), m)
+    }
+    if (banners[t.path]) {
+      banners[np] = banners[t.path]
+      delete banners[t.path]
+    }
+    return { ...t, path: np, name: baseName(np) }
+  })
+  $banners.set(banners)
+  const active = $active.get()
+  if (active && moved(active)) $active.set(moved(active))
+  setTabs(tabs)
+  persistDrafts()
+}
+
+/** A file or folder went to the trash: close its clean tabs; a tab with unsaved edits stays open
+ *  so its text is not lost (saving writes it back). */
+export function trashedOnDisk(path: string) {
+  const k = pathKey(path)
+  for (const t of $tabs.get()) {
+    const tk = pathKey(t.path)
+    if ((tk === k || tk.startsWith(k + '/')) && !t.dirty) closeTab(t.path, true)
   }
 }
 
@@ -632,26 +736,34 @@ export function resolveConflict(path: string, choice: 'mine' | 'theirs' | 'compa
 }
 
 let refreshTimer: ReturnType<typeof setTimeout> | null = null
-let agentPaths = new Set<string>()
 
 /** Debounced: tree + git refresh, and re-sync open files. */
-export function scheduleRefresh(paths: string[] = [], fromAgent = false) {
-  paths.forEach(p => agentPaths.add(p))
+let pendingFromAgent = false
+
+export function scheduleRefresh(fromAgent = false) {
+  // A focus or a save inside the debounce must not erase that the agent wrote meanwhile.
+  pendingFromAgent ||= fromAgent
   if (refreshTimer) {
     clearTimeout(refreshTimer)
   }
   refreshTimer = setTimeout(() => {
     refreshTimer = null
-    agentPaths = new Set()
+    const agent = pendingFromAgent
+    pendingFromAgent = false
     bumpTree()
     void refreshGit()
-    void syncFromDisk(undefined, fromAgent)
+    void syncFromDisk(undefined, agent)
   }, 450)
 }
 
+// Tools that only read: their completion cannot have changed a file under an open tab.
+const READ_ONLY_TOOL = /^(read_file|search_files|web_|vision_|browser_|skill_view|skills_list|session_search|memory|clarify|todo|honcho_|ide_open)/
+
 export function onToolComplete(event: any) {
   const payload = event?.payload ?? {}
-  scheduleRefresh(pathsFromToolArgs(payload.args), true)
+  const name = String(payload.name ?? payload.tool_name ?? payload.tool ?? '')
+  if (name && READ_ONLY_TOOL.test(name) && !pathsFromToolArgs(payload.args).length) return
+  scheduleRefresh(true)
 }
 
 // ── workspace root (follows the focused session's working directory) ────────────────────────
@@ -741,19 +853,26 @@ function persistTabs() {
   ctx?.storage.set(`tabs:${sessionKey}`, { paths: $tabs.get().filter(t => !t.preview).map(t => t.path), active: $active.get() })
 }
 
-function drafts(): Record<string, string> {
-  return (ctx.storage.get('drafts', {}) as Record<string, string>) || {}
+/** Unsaved text kept for crash recovery, per chat (two IDE windows must not overwrite each
+ *  other's), with the mtime of the file version it was typed against. */
+type Draft = { t: string; m?: string }
+
+function drafts(): Record<string, Draft> {
+  const raw = (ctx.storage.get(`drafts:${sessionKey}`, null) ?? ctx.storage.get('drafts', {})) as Record<string, Draft | string> | null
+  const out: Record<string, Draft> = {}
+  for (const [k, v] of Object.entries(raw || {})) out[k] = typeof v === 'string' ? { t: v } : v
+  return out
 }
 
 function persistDrafts() {
-  const out: Record<string, string> = {}
+  const out: Record<string, Draft> = {}
   for (const [k, m] of meta) {
     if (m.draft != null && m.draft.length < 1_000_000) {
-      out[k] = m.draft
+      out[k] = { t: m.draft, m: m.mtime }
     }
   }
   try {
-    ctx.storage.set('drafts', out)
+    ctx.storage.set(`drafts:${sessionKey}`, out)
   } catch {
     // Storage full: the open editor still holds the text; only crash recovery is lost.
   }
@@ -763,7 +882,7 @@ function dropDraft(path: string) {
   const d = drafts()
   if (pathKey(path) in d) {
     delete d[pathKey(path)]
-    ctx.storage.set('drafts', d)
+    ctx.storage.set(`drafts:${sessionKey}`, d)
   }
 }
 
@@ -887,18 +1006,27 @@ export const $browserNav = atom<{ url: string; at: number } | null>(null)
 /** Bumped to ask the Browser column to run the project's UI. */
 export const $runUiRequest = atom(0)
 
-/** Show a URL, or a local file, in the IDE's Browser column.
- *  shortcut: a file opens as file:// in the column's webview, which only reaches files on this
- *  machine; against a remote backend, run the project's UI instead. */
+/** Catalog build: a page waiting to be opened in the app's Browser pane from the Project UI
+ *  column (the SDK can script that Browser but not point it at an address). */
+export const $pagePending = atom<string | null>(null)
+
+/** Show a URL, or a local file, in the IDE's Browser column (full build) or offer it in the Project
+ *  UI column, which opens it in the app's Browser pane (catalog build).
+ *  shortcut: a file opens as file://, which only reaches files on this machine; against a remote
+ *  backend, run the project's UI instead. */
 export function openInBrowser(target: string) {
   const url = pathOrUrl(target)
-  $browserNav.set({ url, at: Date.now() })
+  if (__CATALOG__) {
+    $pagePending.set(url)
+  } else {
+    $browserNav.set({ url, at: Date.now() })
+  }
   openTile('browser')
 }
 
 // ── commands shared by the frame keymap, the palette and the UI ─────────────────────────────
 
-export function revealSidebar(view?: 'explorer' | 'search' | 'scm') {
+export function revealSidebar(view?: 'explorer' | 'search' | 'scm' | 'run') {
   if (view) {
     $view.set(view)
   }
@@ -948,9 +1076,12 @@ export function windowSessionId(): string | null {
   return m ? decodeURIComponent(m[1]) : host.state.focusedStoredSessionId.get() || null
 }
 
-function readRequest(): OpenRequest | null {
+// One request per chat, so two quick requests for different chats never overwrite each other.
+const requestKey = (sid: string) => `${OPEN_REQUEST}:${sid}`
+
+function readRequest(sid: string): OpenRequest | null {
   try {
-    const req = JSON.parse(localStorage.getItem(OPEN_REQUEST) || 'null')
+    const req = JSON.parse(localStorage.getItem(requestKey(sid)) || 'null')
     return req && typeof req.sid === 'string' && typeof req.at === 'number' ? req : null
   } catch {
     return null
@@ -959,12 +1090,12 @@ function readRequest(): OpenRequest | null {
 
 /** Take a request addressed to this window; stale requests (over a minute old) are ignored. */
 function claimRequest(): OpenRequest | null {
-  const req = readRequest()
   const sid = windowSessionId()
+  const req = sid ? readRequest(sid) : null
   if (!req || !sid || req.sid !== sid || Date.now() - req.at > 60_000) {
     return null
   }
-  localStorage.removeItem(OPEN_REQUEST)
+  localStorage.removeItem(requestKey(sid))
   if (req.path || req.url) {
     sessionStorage.setItem(PENDING_OPEN, JSON.stringify({ path: req.path, line: req.line, url: req.url }))
   }
@@ -1025,13 +1156,11 @@ export async function openIdeWindow(open?: { path?: string; line?: number; url?:
   const focused = host.state.focusedStoredSessionId.get()
   // The IDE opens the chat you are looking at. On a page such as Capabilities the app still keeps
   // a "focused" session (the first tile), which is not what the user means, so require a chat on
-  // screen: its composer is visible. (The route id is no test: a compacted chat continues under a
-  // new stored id while the route can keep an earlier one.) An agent request names its own session.
-  const chatOnScreen = [...document.querySelectorAll<HTMLElement>('[contenteditable="true"]')].some(
-    el => !el.closest('.hi-tile, [role="dialog"]') && el.getBoundingClientRect().width > 0
-  )
+  // screen: the app reports a draft (possibly empty) only while a composer is showing. (The route id
+  // is no test: a compacted chat continues under a new stored id while the route keeps an earlier
+  // one.) A row click or an agent request names its own session.
+  const chatOnScreen = open?.sid ? true : (await host.composer.getDraft(null).catch(() => null)) !== null
   const sid = open?.sid ?? (chatOnScreen ? focused : null)
-  const bridge = (window as any).hermesDesktop
   if (!sid) {
     notify(
       'info',
@@ -1040,7 +1169,7 @@ export async function openIdeWindow(open?: { path?: string; line?: number; url?:
     )
     return
   }
-  if (typeof bridge?.openSessionWindow !== 'function') {
+  if (typeof host.openSession !== 'function') {
     notify('warning', 'This Hermes Desktop cannot open pop-out windows. Update Hermes Desktop.', 'Hermes IDE')
     return
   }
@@ -1055,16 +1184,13 @@ export async function openIdeWindow(open?: { path?: string; line?: number; url?:
     location.reload()
     return
   }
-  localStorage.setItem(OPEN_REQUEST, JSON.stringify(req))
+  localStorage.setItem(requestKey(sid), JSON.stringify(req))
   markIdeChat(sid)
-  const owner = host.state.focusedSessionOwner?.get?.()
   try {
-    await bridge.openSessionWindow(sid, {
-      profile: owner?.profile ?? host.state.focusedSessionProfile?.get?.() ?? null,
-      connectionId: owner?.connectionId ?? null
-    })
+    // The app's own pop-out for one chat; it resolves the chat's profile and backend itself.
+    await host.openSession(sid, { intent: 'window' })
   } catch (e) {
-    localStorage.removeItem(OPEN_REQUEST)
+    localStorage.removeItem(requestKey(sid))
     notify('error', `Could not open the IDE window: ${(e as Error).message}`, 'Hermes IDE')
   }
 }
@@ -1073,7 +1199,7 @@ export async function openIdeWindow(open?: { path?: string; line?: number; url?:
  *  into the IDE (the app fronts the existing window instead of opening a second one) or, in the
  *  IDE window, carries a file to open. */
 export function onStorageRequest(e: StorageEvent) {
-  if (e.key !== OPEN_REQUEST || !e.newValue || !isPopout()) {
+  if (!e.key?.startsWith(OPEN_REQUEST + ':') || !e.newValue || !isPopout()) {
     return
   }
   const req = claimRequest()
@@ -1097,11 +1223,68 @@ export function onStorageRequest(e: StorageEvent) {
 
 /** Wait `n` animation frames, or a moment when the window is not painting: a window behind
  *  another gets no animation frames, which would otherwise stall the layout code. */
-const frames = (n = 2) => new Promise<void>(resolve => {
+export const frames = (n = 2) => new Promise<void>(resolve => {
   const timer = setTimeout(resolve, 80 * n)
   const step = () => (--n <= 0 ? (clearTimeout(timer), resolve()) : requestAnimationFrame(step))
   requestAnimationFrame(step)
 })
+
+export function savedLayout(): Layout {
+  const v = readPerChat<Layout>('layout')
+  return v && Array.isArray(v.columns) ? { columns: v.columns, widths: v.widths && typeof v.widths === 'object' ? v.widths : {} } : DEFAULT_LAYOUT
+}
+
+/** `ready` once the IDE window has its columns (no save may record a half-built arrangement);
+ *  `fitting` while the full build sizes columns. */
+export const layoutState = { ready: false, fitting: false }
+
+/** Remember which columns are open (both builds) and, in the full build, the arrangement and
+ *  widths the user has now. */
+export function saveLayout() {
+  if (!__CATALOG__) fullSaveLayout()
+}
+
+/** Rebuild the saved arrangement: open each tile docked against its already placed neighbour. */
+async function restoreLayout() {
+  let tiles = savedTiles()
+  if (__CATALOG__) {
+    // The Explorer panel lives in the Editor column: showing it means showing that column.
+    $explorerPanel.set(tiles.includes('explorer'))
+    tiles = (tiles.includes('explorer') || tiles.includes('browser')) && !tiles.includes('editor') ? [...tiles, 'editor'] : tiles
+    if (tiles.includes('browser')) $explorerPanel.set(true)
+    if (tiles.includes('browser')) $view.set('run')
+    tiles = tiles.filter(id => id !== 'explorer' && id !== 'browser')
+  }
+  for (const step of dockPlan(savedLayout(), tiles)) {
+    openTile(step.id, step.dock)
+    await frames(2) // let the app adopt the tile before the next one docks against it
+  }
+}
+
+/** Put every column back where a fresh install has it: forget the arrangement and rebuild the
+ *  window through the same restore path it boots with. (Closing and reopening tiles in place races
+ *  the app's pane adoption and can leave an empty zone.) */
+export function resetLayout() {
+  layoutState.ready = false // no save on the way out (pagehide) may write the old arrangement back
+  ctx.storage.remove(perChat('layout'))
+  ctx.storage.remove('layout')
+  location.reload()
+}
+
+/** The IDE window shows one chat: hide the app's session list there (pop-out layout state is
+ *  memory-only, so this never touches the main window's sidebar). The app says whether the list is
+ *  on screen (`host.paneVisibility('sessions')`) and hides it with its own toggle action. */
+async function hideSessionList() {
+  const shown = host.paneVisibility?.('sessions')
+  if (!shown || typeof ctx.runAction !== 'function') return
+  // The toggle only takes effect once the window is wide (a narrow window treats the list as an
+  // overlay), so verify and retry a few times instead of trusting one call.
+  // A toggle is not idempotent: wait for each one to land before deciding to try again.
+  for (let i = 0; i < 3 && shown.get(); i++) {
+    ctx.runAction('view.toggleSidebar')
+    for (let t = 0; t < 15 && shown.get(); t++) await new Promise(r => setTimeout(r, 100))
+  }
+}
 
 /** Resolve once the window size has held still for `quiet` ms (a maximize lands in steps). */
 function sizeSettled(quiet = 300, cap = 2500) {
@@ -1135,272 +1318,34 @@ function maximized(cap = 6000) {
   })
 }
 
-/** Move the app's split seam at `edge` (window x) to `target`. shortcut: the SDK has no door to
- *  size a split, so this drags the app's own sash with synthetic pointer events (tree-split.tsx
- *  accepts them, clamps to each zone's floor, and commits once on release). Upgrade to a host
- *  door when the SDK ships one; without a sash the layout keeps the app's even split. */
-async function dragSeam(edge: number, target: number): Promise<boolean> {
-  const sash = [...document.querySelectorAll<HTMLElement>('[role="separator"]')]
-    .filter(el => !el.closest('.hi-tile'))
-    .map(el => ({ el, r: el.getBoundingClientRect() }))
-    .filter(s => s.r.height > 200 && s.r.width > 0 && s.r.width < 24 && Math.abs(s.r.left - edge) < 24)
-    .sort((a, b) => Math.abs(a.r.left - edge) - Math.abs(b.r.left - edge))[0]
-  if (!sash) {
-    return false
-  }
-  const y = Math.round(sash.r.top + sash.r.height / 2)
-  const base = { bubbles: true, cancelable: true, pointerId: 1, pointerType: 'mouse', isPrimary: true, clientY: y }
-  // The seam moves by the pointer's travel from where it pressed (the sash's middle), so aim the
-  // pointer that far past the target or every fitted column lands half a sash short.
-  const down = Math.round(sash.r.left + sash.r.width / 2)
-  const to = Math.round(target + down - sash.r.left)
-  sash.el.dispatchEvent(new PointerEvent('pointerdown', { ...base, clientX: down, button: 0, buttons: 1 }))
-  window.dispatchEvent(new PointerEvent('pointermove', { ...base, clientX: to, button: -1, buttons: 1 }))
-  await frames(2) // the sash previews once per animation frame and commits on release
-  window.dispatchEvent(new PointerEvent('pointerup', { ...base, clientX: to, button: 0, buttons: 0 }))
-  return true
-}
-
-interface Column {
-  ids: ColumnId[]
-  left: number
-  width: number
-}
-
-/** The window's top-row columns, left to right, with the IDE columns and the chat they hold.
- *  Zones that start lower (a terminal panel) are not columns. shortcut: a column split top and
- *  bottom is read as one column holding both stacks; it is rebuilt side by side. */
-function readColumns(): Column[] {
-  const zones = [...document.querySelectorAll<HTMLElement>('[data-tree-group]:not([data-pane-host])')]
-    .map(el => ({ r: el.getBoundingClientRect(), id: el.getAttribute('data-tree-group') || '' }))
-    .filter(z => z.r.width > 0 && z.r.height > 0 && z.id !== 'grp-sessions')
-  if (!zones.length) return []
-  const top = Math.min(...zones.map(z => z.r.top))
-  const cols: Column[] = []
-  for (const z of zones.filter(z => z.r.top <= top + 4).sort((a, b) => a.r.left - b.r.left)) {
-    if (!cols.some(c => Math.abs(c.left - z.r.left) < 4)) cols.push({ ids: [], left: z.r.left, width: z.r.width })
-  }
-  // By geometry, not DOM nesting: a pane body can be hosted outside its zone element.
-  const colAt = (el: Element | null | undefined) => {
-    const r = el?.getBoundingClientRect()
-    if (!r || r.width <= 0) return undefined
-    const x = r.left + r.width / 2
-    return cols.find(c => x >= c.left && x <= c.left + c.width)
-  }
-  const composer = [...document.querySelectorAll<HTMLElement>('[contenteditable="true"]')].find(
-    el => !el.closest('.hi-tile, [role="dialog"]') && el.getBoundingClientRect().width > 0
-  )
-  colAt(composer)?.ids.push('chat')
-  // A closed tile's DOM can linger hidden for a moment; take the copy that is on screen.
-  for (const id of TILE_IDS) colAt([...document.querySelectorAll(`.hi-tile[data-tile="${id}"]`)].find(el => el.getBoundingClientRect().width > 0))?.ids.push(id)
-  return cols
-}
-
-export function savedLayout(): Layout {
-  const v = readPerChat<Layout>('layout')
-  return v && Array.isArray(v.columns) ? { columns: v.columns, widths: v.widths && typeof v.widths === 'object' ? v.widths : {} } : DEFAULT_LAYOUT
-}
-
-let layoutReady = false
-let fitting = false
-
-/** Record the arrangement the user has now. Tabs stacked behind another are not on screen, so an
- *  open tile that cannot be found keeps the column it had in the saved layout. */
-function captureLayout(): Layout | null {
-  const cols = readColumns().filter(c => c.ids.length)
-  if (!cols.length || !cols.some(c => c.ids.includes('chat'))) return null
-  const prev = savedLayout()
-  const placed = new Set(cols.flatMap(c => c.ids))
-  for (const id of $openTiles.get()) {
-    if (placed.has(id)) continue
-    const mates = prev.columns.find(col => col.includes(id)) || []
-    const home = cols.find(c => c.ids.some(x => mates.includes(x)))
-    if (home) home.ids.push(id)
-  }
-  const W = window.innerWidth
-  const widths: Layout['widths'] = { ...prev.widths }
-  for (const c of cols) for (const id of c.ids) widths[id] = Math.round((c.width / W) * 1000) / 1000
-  return { columns: cols.map(c => c.ids), widths }
-}
-
-let lastSaved = ''
-
-export function saveLayout() {
-  if (!IDE_WINDOW || !layoutReady || fitting) return
-  const layout = captureLayout()
-  if (!layout) return
-  const prev = savedLayout()
-  if (JSON.stringify(layout.columns) !== JSON.stringify(prev.columns)) {
-    // A column moved: the app re-splits the window evenly after a move, so keep each column's
-    // own width (keyed by column, not position) and refit before recording widths again.
-    writePerChat('layout', { columns: layout.columns, widths: prev.widths })
-    lastSaved = ''
-    void fitColumns().then(saveLayout)
-    return
-  }
-  const json = JSON.stringify(layout)
-  if (json !== lastSaved) {
-    lastSaved = json
-    writePerChat('layout', layout)
-  }
-}
-
-/** Size the columns: saved widths where the user set them, the column plan elsewhere; the editor
- *  (or the chat, with the editor closed) takes the rest. Columns the IDE does not own keep theirs. */
-let refitWhenShown = false
-
-export async function fitColumns(): Promise<void> {
-  if (fitting) return
-  // The app's sash only previews (and so moves) on animation frames: fit once the window paints.
-  if (document.visibilityState !== 'visible') {
-    refitWhenShown = true
-    return
-  }
-  fitting = true
-  try {
-    await frames(3)
-    const W = window.innerWidth
-    const saved = savedLayout().widths
-    const measure = () => readColumns()
-    let cols = measure()
-    const ids = cols.map(c => (c.ids.includes('editor') ? 'editor' : c.ids.includes('chat') ? 'chat' : (c.ids[0] ?? null)))
-    const planned = columnWidths(ids, W, saved)
-    const widths = planned.map((w, i) => (w === null && ids[i] === null ? cols[i].width : w))
-    const flex = widths.indexOf(null)
-    if (flex < 0) return
-    // Work outward-in toward the flexible column, re-measuring after each move and aiming from
-    // where the neighbour really ended up: the app clamps a column at its floor (the chat's is
-    // wider than its plan on large screens), so planned sums would misplace the next seam.
-    for (let k = 0; k < flex; k++) {
-      const edge = cols[k].left + cols[k].width
-      const target = cols[k].left + (widths[k] as number)
-      if (Math.abs(edge - target) > 6 && (await dragSeam(edge, target))) {
-        await frames(3)
-        cols = measure()
-      }
-    }
-    for (let k = cols.length - 1; k > flex; k--) {
-      const edge = cols[k].left
-      const target = cols[k].left + cols[k].width - (widths[k] as number)
-      if (Math.abs(edge - target) > 6 && (await dragSeam(edge, target))) {
-        await frames(3)
-        cols = measure()
-      }
-    }
-  } finally {
-    fitting = false
-  }
-}
-
-/** Rebuild the saved arrangement: open each tile docked against its already placed neighbour. */
-async function restoreLayout() {
-  for (const step of dockPlan(savedLayout(), savedTiles())) {
-    openTile(step.id, step.dock)
-    await frames(2) // let the app adopt the tile before the next one docks against it
-  }
-}
-
-/** Put every column back where a fresh install has it: forget the arrangement and rebuild the
- *  window through the same restore path it boots with. (Closing and reopening tiles in place races
- *  the app's pane adoption and can leave an empty zone.) */
-export function resetLayout() {
-  layoutReady = false // no save on the way out (pagehide) may write the old arrangement back
-  ctx.storage.remove(perChat('layout'))
-  ctx.storage.remove('layout')
-  location.reload()
-}
-
-/** Fit columns when one opens or closes, and save the arrangement while the user works. */
-export function watchLayout() {
-  let timer = 0
-  let zones = -1
-  const obs = new MutationObserver(() => {
-    const n = document.querySelectorAll('[data-tree-group]').length
-    if (n === zones) return // chat streaming mutates constantly; only a new or closed zone matters
-    zones = n
-    clearTimeout(timer)
-    timer = window.setTimeout(() => {
-      if (layoutReady) void fitColumns().then(saveLayout)
-    }, 400)
-  })
-  obs.observe(document.body, { childList: true, subtree: true })
-  const save = () => window.setTimeout(saveLayout, 300)
-  window.addEventListener('pointerup', save, true)
-  const shown = () => {
-    if (refitWhenShown && document.visibilityState === 'visible') {
-      refitWhenShown = false
-      void fitColumns().then(saveLayout)
-    }
-  }
-  document.addEventListener('visibilitychange', shown)
-  window.addEventListener('focus', shown)
-  const tick = window.setInterval(saveLayout, 3000)
-  ctx.onDispose(() => {
-    clearTimeout(timer)
-    clearInterval(tick)
-    window.removeEventListener('pointerup', save, true)
-    document.removeEventListener('visibilitychange', shown)
-    window.removeEventListener('focus', shown)
-    obs.disconnect()
-  })
-}
-
-/** The IDE window shows one chat: hide the app's session list there (pop-out layout state is
- *  memory-only, so this never touches the main window's sidebar). */
-async function hideSessionList() {
-  const visible = () => (document.querySelector<HTMLElement>('[data-tree-group="grp-sessions"]')?.getBoundingClientRect().width ?? 0) > 0
-  // The toggle only takes effect once the window is wide (a narrow window treats the list as an
-  // overlay), so verify and retry a few times instead of trusting one call.
-  for (let i = 0; i < 4 && visible(); i++) {
-    ctx.runAction?.('view.toggleSidebar')
-    await new Promise(r => setTimeout(r, 400))
-  }
-}
-
-/** IDE window only: the app draws its zone seams at 10% so a chat window stays calm; an IDE needs
- *  its columns readable at a glance (Cursor draws a full 1px line), so draw them at full strength in
- *  the same neutral divider the IDE tile uses (theme base colour at 18%). Removed with the plugin. */
-function styleIdeWindow() {
-  const el = document.createElement('style')
-  el.id = 'hermes-ide-window'
-  el.textContent =
-    '[data-sash-overlap] > span:first-child{opacity:1 !important;transform:none !important;translate:none !important;background:color-mix(in srgb,var(--ui-base) 18%,transparent) !important}' +
-    // The chat is the middle tone between the Explorer and the editor; glass skins leave it clear.
-    '[data-tree-group="grp-main"]{background:var(--ui-bg-chrome)}'
-  document.head.append(el)
-  ctx.onDispose(() => el.remove())
-}
-
-/** IDE window boot: take the room an IDE needs, rebuild the columns beside the chat, size them. */
-export async function setupIdeWindow() {
-  const bridge = (window as any).hermesDesktop
-  markIdeChat(windowSessionId())
-  // The app opens pop-outs at a compact 420px; maximize once per window (the user can restore it).
+/** The app opens pop-outs at a compact 420px, too narrow for an IDE: maximize once per window (the
+ *  user can restore it). shortcut: the SDK has no window verb, so this is the plugin's one call on
+ *  the app's raw bridge (its own title-bar maximize); upgrade to a host door when one ships. */
+function maximizeOnce() {
   if (!sessionStorage.getItem('hermes-ide:sized') && window.outerWidth < screen.availWidth * 0.85) {
     sessionStorage.setItem('hermes-ide:sized', '1')
-    bridge?.windowControls?.toggleMaximize?.()
+    ;(window as any).hermesDesktop?.windowControls?.toggleMaximize?.()
   }
-  styleIdeWindow()
-  // For the CDP checks in docs/DEVELOPING.md.
-  ;(window as any).__hermesIde = { fitColumns, readColumns, savedLayout, captureLayout, browserNav: $browserNav }
+}
+
+/** IDE window boot: take the room an IDE needs, rebuild the columns beside the chat and hide the
+ *  session list. The full build also sizes the columns. */
+export async function setupIdeWindow() {
+  markIdeChat(windowSessionId())
+  maximizeOnce()
+  if (!__CATALOG__) fullWindowSetup()
   await restoreLayout()
   // The chat's tabs were restored before the editor tile existed; load the active one now.
   const want = $active.get() ?? $tabs.get()[0]?.path
   if (want && !meta.has(pathKey(want)) && closers.has('editor')) activate(want)
-  await maximized()
-  await sizeSettled()
-  await hideSessionList()
-  await frames(2)
-  await fitColumns()
-  layoutReady = true
-  saveLayout()
+  // A file or page the window was opened for shows now, not after the window has settled.
   const pending = sessionStorage.getItem(PENDING_OPEN)
   if (pending) {
     sessionStorage.removeItem(PENDING_OPEN)
     try {
       const p = JSON.parse(pending)
       if (typeof p?.path === 'string') {
-        await openFile(p.path, { line: Number(p.line) > 0 ? Number(p.line) : undefined })
+        void openFile(p.path, { line: Number(p.line) > 0 ? Number(p.line) : undefined })
       }
       if (typeof p?.url === 'string') {
         openInBrowser(p.url)
@@ -1409,6 +1354,15 @@ export async function setupIdeWindow() {
       /* malformed request: ignore */
     }
   }
+  await maximized()
+  await sizeSettled()
+  await hideSessionList()
+  if (!__CATALOG__) {
+    await frames(2)
+    await fitColumns()
+  }
+  layoutState.ready = true
+  saveLayout()
 }
 
 export function runCommand(id: string) {
@@ -1443,7 +1397,8 @@ export function runCommand(id: string) {
       $runUiRequest.set($runUiRequest.get() + 1)
       break
     case 'toggleTerminal':
-      host.revealPane?.('terminal')
+      // The app's terminal has no plugin action; say how to reach it instead of doing nothing.
+      notify('info', "Use the app's terminal toggle (Ctrl+`) with the chat focused; the editor keeps that key for itself.", 'Hermes IDE')
       break
     case 'closeTab':
       if (active) {

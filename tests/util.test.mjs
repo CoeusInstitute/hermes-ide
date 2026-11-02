@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { addressToUrl, columnPlan, columnWidths, DEFAULT_LAYOUT, dockPlan, fileRef, fuzzyScore, isInside, normalizeLayout, pathOrUrl, pathsFromToolArgs, rankFiles, relPath, splitLineSuffix } from '../src/util.ts'
+import { addressToUrl, columnPlan, columnWidths, DEFAULT_LAYOUT, detectEol, dockPlan, fileRef, fuzzyScore, isInside, normalizeLayout, pathOrUrl, pathsFromToolArgs, rankFiles, relPath, splitLineSuffix } from '../src/util.ts'
 
 test('fileRef emits the @file syntax Hermes expands, relative to the workspace', () => {
   assert.equal(fileRef('D:/proj/src/app.ts', 'D:/proj'), '@file:src/app.ts')
@@ -85,7 +85,8 @@ test('normalizeLayout tolerates junk and places tiles the saved layout never saw
 test('columnWidths: plan by default, saved fractions win, the editor takes the rest', () => {
   assert.deepEqual(columnWidths(['explorer', 'editor', 'browser', 'chat'], 3840), [340, null, 1229, 760])
   assert.deepEqual(columnWidths(['explorer', 'editor', 'chat'], 3840, { explorer: 0.1, chat: 2 }), [384, null, 760])
-  assert.deepEqual(columnWidths(['explorer', 'chat', null], 1920), [269, null, null])
+  // A zone the IDE does not own gets the Browser column's room (it used to keep its own width).
+  assert.deepEqual(columnWidths(['explorer', 'chat', null], 1920), [269, null, 614])
 })
 
 test('address bar input becomes a URL the webview can load', () => {
@@ -106,3 +107,15 @@ test('Open in Browser turns local paths into file URLs and leaves URLs alone', (
   assert.equal(pathOrUrl('file:///C:/x.html'), 'file:///C:/x.html')
 })
 
+
+test('detectEol takes the dominant line ending, not the first CRLF it sees', () => {
+  assert.equal(detectEol('a\nb\nc\r\nd\n'), '\n')
+  assert.equal(detectEol('a\r\nb\r\nc\n'), '\r\n')
+  assert.equal(detectEol('one line'), '\n')
+})
+
+test('columnWidths: a zone the IDE does not own shares the Browser column room', () => {
+  const w = columnWidths(['explorer', 'editor', 'browser', 'chat', null], 3840)
+  assert.deepEqual(w, [340, null, 615, 760, 615])
+  assert.deepEqual(columnWidths(['editor', 'chat', null], 3840), [null, 760, 1229])
+})

@@ -1,12 +1,21 @@
 // Builds desktop/plugin.js: one plain ESM file that imports only @hermes/plugin-sdk, react and
-// react/jsx-runtime (the only specifiers the Hermes Desktop disk loader resolves). The CodeMirror
-// editor is bundled separately into an IIFE and inlined as the editor frame's srcdoc.
+// react/jsx-runtime (the only specifiers the Hermes Desktop disk loader resolves). CodeMirror is
+// bundled with the rest and renders into the editor iframe, whose srcdoc is plain markup (styles
+// and three empty elements, no script).
 //
-//   cd dev && npm ci && npm run build      build once
+// Two targets, one source:
+//   catalog  (default) stays inside the Desktop plugin SDK surface, so `hermes plugins validate`
+//            passes: what the Hermes plugin catalog lists.
+//   full     adds the features that need the app's own markup until the SDK has hooks for them
+//            (src/full/: the sidebar's IDE group, an in-column Browser, column fitting and
+//            layout memory, window maximize). For a local install; never listed.
+//
+//   cd dev && npm ci && npm run build      build once (catalog)
+//   npm run build:full                     the full build
 //   npm run watch                          rebuild on change
 
 import { build, context } from 'esbuild'
-import { readFileSync, statSync } from 'node:fs'
+import { statSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -18,6 +27,12 @@ process.chdir(ROOT)
 const nodePaths = [resolve(DEV, 'node_modules')]
 
 const watch = process.argv.includes('--watch')
+const targetArg = process.argv.find(a => a.startsWith('--target='))?.slice(9) ?? 'catalog'
+if (targetArg !== 'catalog' && targetArg !== 'full') {
+  console.error(`unknown --target=${targetArg} (catalog | full)`)
+  process.exit(1)
+}
+const CATALOG = targetArg === 'catalog'
 const EXTERNAL = ['@hermes/plugin-sdk', 'react', 'react/jsx-runtime']
 
 const FRAME_CSS = `
@@ -50,50 +65,38 @@ const WATERMARK = [
   ['openFolder', 'Open Folder', '']
 ]
 
-async function frameHtml() {
-  const out = await build({
-    entryPoints: ['src/frame/editor.ts'],
-    bundle: true,
-    format: 'iife',
-    minify: true,
-    write: false,
-    target: 'chrome120',
-    legalComments: 'none',
-    nodePaths,
-    absWorkingDir: ROOT
-  })
-  // Inline <script>: a literal "</script" anywhere in the bundle would end the element early.
-  const js = out.outputFiles[0].text.replace(/<\/script/gi, '<\\/script')
+function frameHtml() {
   return `<!doctype html><html><head><meta charset="utf-8"><style>${FRAME_CSS}</style></head><body>` +
     `<div id="empty"><div class="wm">${WATERMARK.map(([cmd, label, keys]) => `<button data-cmd="${cmd}"><span>${label}</span><b>${keys ? keys.split(' ').map(k => `<kbd>${k}</kbd>`).join('') : ''}</b></button>`).join('')}</div></div>` +
-    `<div id="editor"></div><div id="menu"></div><script>${js}</script></body></html>`
+    `<div id="editor"></div><div id="menu"></div></body></html>`
 }
 
 const framePlugin = {
   name: 'frame-html',
   setup(b) {
     b.onResolve({ filter: /^virtual:frame-html$/ }, () => ({ path: 'frame-html', namespace: 'virtual' }))
-    b.onLoad({ filter: /.*/, namespace: 'virtual' }, async () => ({
-      contents: `export default ${JSON.stringify(await frameHtml())}`,
-      loader: 'js',
-      watchFiles: ['src/frame/editor.ts']
+    b.onLoad({ filter: /.*/, namespace: 'virtual' }, () => ({
+      contents: `export default ${JSON.stringify(frameHtml())}`,
+      loader: 'js'
     }))
   }
 }
 
+// The bundle's real imports, from esbuild's own metafile (a text scan would trip over source that
+// merely mentions the word import, such as a language's keyword list).
 const checkImports = {
   name: 'check-imports',
   setup(b) {
     b.onEnd(result => {
-      if (result.errors.length) return
-      const text = readFileSync('desktop/plugin.js', 'utf8')
-      const specs = [...text.matchAll(/^\s*import\b[^'"]*['"]([^'"]+)['"]/gm)].map(m => m[1])
-      const bad = specs.filter(s => !EXTERNAL.includes(s))
-      if (bad.length || /\bimport\s*\(/.test(text)) {
-        console.error('desktop/plugin.js imports something the Desktop loader refuses:', bad.length ? bad : 'dynamic import()')
+      if (result.errors.length || !result.metafile) return
+      const out = Object.values(result.metafile.outputs)[0]
+      const specs = out.imports.map(i => i.path)
+      const bad = out.imports.filter(i => !i.external || i.kind !== 'import-statement' || !EXTERNAL.includes(i.path))
+      if (bad.length) {
+        console.error('desktop/plugin.js imports something the Desktop loader refuses:', bad.map(i => `${i.kind} ${i.path}`))
         process.exitCode = 1
       } else {
-        console.log(`desktop/plugin.js ${(statSync('desktop/plugin.js').size / 1024).toFixed(0)} KB, imports: ${[...new Set(specs)].join(', ')}`)
+        console.log(`desktop/plugin.js (${targetArg}) ${(statSync('desktop/plugin.js').size / 1024).toFixed(0)} KB, imports: ${[...new Set(specs)].join(', ')}`)
       }
     })
   }
@@ -111,7 +114,11 @@ const options = {
   legalComments: 'none',
   nodePaths,
   absWorkingDir: ROOT,
-  banner: { js: '// Hermes IDE desktop plugin. Built from src/ by dev/build.mjs; do not edit by hand.' },
+  metafile: true,
+  // __CATALOG__ is a build constant: the full-only branches (and the src/full/ modules only they
+  // import) are dropped from the catalog bundle, not just skipped at run time.
+  define: { __CATALOG__: String(CATALOG) },
+  banner: { js: `// Hermes IDE desktop plugin (${targetArg} build). Built from src/ by dev/build.mjs; do not edit by hand.` },
   plugins: [framePlugin, checkImports]
 }
 

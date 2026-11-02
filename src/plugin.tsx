@@ -1,12 +1,16 @@
 // Hermes IDE desktop plugin entry.
 //
 // Two roles, decided per window:
-//  - Main window: entry points only. "IDE: Open in IDE Window" (Ctrl+Alt+I), a status-bar button,
-//    the agent's ide_open tool, and the sidebar's IDE group (IDE chats, which open in their IDE
-//    window) and IDE row badges. The main window's layout is never changed.
+//  - Main window: entry points only. "IDE: Open in IDE Window" (Ctrl+Alt+I), a status-bar button
+//    with the IDE chats menu, the agent's ide_open tool, and IDE badges on IDE chats' session rows
+//    (the full build adds an IDE group to the session list). The main window's layout is never
+//    changed.
 //  - IDE window: the app's own single-session pop-out, claimed by this plugin. It holds exactly
-//    one chat (the app's real chat, not a copy) with the IDE's columns (Explorer, Editor, Browser)
-//    as app tiles around it, which the user drags into any arrangement.
+//    one chat (the app's real chat, not a copy) with the IDE's columns (Explorer, Editor, and the
+//    project's UI) as app tiles around it, which the user drags into any arrangement.
+//
+// Two builds of this one source (dev/build.mjs): the catalog build stays inside the Desktop plugin
+// SDK; the full build adds src/full/ for what the SDK has no hook for yet (`__CATALOG__` false).
 
 import * as sdk from '@hermes/plugin-sdk'
 import { host } from '@hermes/plugin-sdk'
@@ -34,16 +38,19 @@ import {
   showIde,
   switchSession,
   syncRoot,
-  watchLayout,
   windowSessionId,
   $folderDialog,
   $quickOpen,
+  $view,
+  noteTiles,
   $active,
   addToChat,
   applyPendingCwd
 } from './core'
-import { initSidebar } from './sidebar'
-import { BrowserTile, EditorTile, ExplorerTile, IdeRowBadge, LayoutToggles, OpenCard, SettingsPage, StatusItem } from './ui'
+import { watchLayout } from './full/layout'
+import { initSidebar } from './full/sidebar'
+import { $sessionRows, initIdeChats, matches } from './ide-chats'
+import { BrowserTile, EditorTile, ExplorerTile, IdeRowBadge, LayoutToggles, OpenCard, SettingsPage, StatusItem, Workbench } from './ui'
 
 const PLUGIN_ID = 'hermes-ide'
 
@@ -52,8 +59,12 @@ type Command = { id: string; label: string; keys?: string[]; run: () => void; ke
 export default {
   id: PLUGIN_ID,
   name: 'Hermes IDE',
+  // The element picker and page reload run a script in the app's Browser pane; the app asks the
+  // user once per site before any runs (ctx.preview).
+  capabilities: ['preview.executeJavaScript'],
   register(ctx: any) {
-    bindContext(ctx, { explorer: () => <ExplorerTile />, editor: () => <EditorTile />, browser: () => <BrowserTile /> })
+    // Catalog build: the Explorer is a panel inside the Editor column (see core.ts $explorerPanel).
+    bindContext(ctx, { explorer: () => <ExplorerTile />, editor: () => (__CATALOG__ ? <Workbench /> : <EditorTile />), browser: () => <BrowserTile /> })
     loadSettings()
     loadIdeChats()
 
@@ -69,7 +80,7 @@ export default {
       {
         id: 'open-card',
         area: area('TRANSCRIPT_DIRECTIVE_AREA', 'transcript.directives'),
-        data: { name: 'hermes-ide-open', render: (props: any) => <OpenCard attrs={props.attrs} /> }
+        data: { name: 'hermes-ide-open', render: (props: any) => <OpenCard attrs={props.attrs} sessionId={props.sessionId} /> }
       }
     ])
 
@@ -118,14 +129,23 @@ export default {
       ctx.onEvent(`plugin.${PLUGIN_ID}.open`, (ev: any) => {
         const p = ev?.payload ?? {}
         const focused = host.state.focusedStoredSessionId.get()
-        if ((p.path || p.url) && p.session_id && p.session_id === focused) {
+        // The same chat under another id: compaction continues a chat under a new stored id.
+        const same = (a: string, b: string | null) => !!b && (a === b || $sessionRows.get().some(r => matches(r, a) && matches(r, b)))
+        if ((p.path || p.url) && p.session_id && same(p.session_id, focused)) {
           void openIdeWindow({ path: p.path || undefined, line: Number(p.line) > 0 ? Number(p.line) : undefined, url: p.url || undefined, sid: p.session_id })
         }
       })
-      initSidebar()
+      initIdeChats()
+      if (!__CATALOG__) initSidebar()
       if (!ctx.storage.get('welcomed-v3', false)) {
         ctx.storage.set('welcomed-v3', true)
-        notify('info', 'Press Ctrl+Alt+I, or click IDE in the status bar, to open this chat in its own IDE window. IDE chats get their own group in the sidebar.', 'Hermes IDE')
+        notify(
+          'info',
+          __CATALOG__
+            ? 'Press Ctrl+Alt+I, or click IDE in the status bar, to open this chat in its own IDE window. IDE chats carry an IDE badge; the arrow beside IDE lists them.'
+            : 'Press Ctrl+Alt+I, or click IDE in the status bar, to open this chat in its own IDE window. IDE chats get their own group in the sidebar.',
+          'Hermes IDE'
+        )
       }
       return
     }
@@ -136,17 +156,19 @@ export default {
       { id: 'show', label: 'IDE: Show IDE', keys: ['mod+alt+i'], run: showIde, keywords: ['ide', 'editor', 'cursor', 'code'] },
       { id: 'quickOpen', label: 'IDE: Go to File…', keys: ['mod+alt+p'], run: () => $quickOpen.set(true), keywords: ['quick open', 'file'] },
       { id: 'findInFiles', label: 'IDE: Search in Files', keys: ['mod+alt+f'], run: () => revealSidebar('search'), keywords: ['grep', 'find'] },
-      { id: 'explorer', label: 'IDE: Show Explorer', keys: ['mod+alt+e'], run: () => revealSidebar('explorer') },
+      // No Ctrl+Alt+E default: on Windows that is AltGr+E, which types € (or ę) in the composer.
+      // Ctrl+Shift+E works inside the editor.
+      { id: 'explorer', label: 'IDE: Show Explorer', run: () => revealSidebar('explorer') },
       { id: 'toggleExplorer', label: 'IDE: Toggle Explorer Column', run: () => runCommand('toggleSidebar'), keywords: ['sidebar', 'files', 'column'] },
       { id: 'toggleEditor', label: 'IDE: Toggle Editor Column', run: () => runCommand('toggleEditor'), keywords: ['code', 'column'] },
-      { id: 'toggleBrowser', label: 'IDE: Toggle Browser Column', keys: ['mod+alt+b'], run: () => runCommand('toggleBrowser'), keywords: ['preview', 'web', 'column'] },
+      { id: 'toggleBrowser', label: __CATALOG__ ? 'IDE: Toggle Project UI Column' : 'IDE: Toggle Browser Column', keys: ['mod+alt+b'], run: () => runCommand('toggleBrowser'), keywords: ['preview', 'web', 'browser', 'dev server', 'column'] },
       { id: 'resetLayout', label: 'IDE: Reset Column Layout', run: () => void resetLayout(), keywords: ['arrange', 'columns', 'default'] },
       { id: 'runUi', label: "IDE: Run Project's UI", keys: ['mod+alt+r'], run: () => void startUi(), keywords: ['dev server', 'npm run dev', 'vite', 'next', 'start', 'preview'] },
       { id: 'stopUi', label: "IDE: Stop Project's UI", run: () => void stopUi(), keywords: ['dev server', 'stop'] },
       {
         id: 'pick',
         label: 'IDE: Pick Element in Browser',
-        run: () => void pickElement(document.querySelector('.hi-tile[data-tile="browser"] webview')),
+        run: () => void pickElement(__CATALOG__ ? undefined : document.querySelector('.hi-tile[data-tile="browser"] webview')),
         keywords: ['inspect', 'select', 'component', 'annotate']
       },
       { id: 'scm', label: 'IDE: Show Source Control', run: () => revealSidebar('scm'), keywords: ['git'] },
@@ -162,7 +184,9 @@ export default {
     const sid = windowSessionId()
     ctx.onEvent(`plugin.${PLUGIN_ID}.open`, (ev: any) => {
       const p = ev?.payload ?? {}
-      if (p.session_id && p.session_id !== sid) return
+      // This window's one chat, by any of its ids (route, stored after compaction, runtime).
+      const mine = [sid, host.state.focusedStoredSessionId.get(), host.state.focusedSessionId.get()]
+      if (p.session_id && !mine.includes(p.session_id)) return
       if (typeof p.path === 'string' && p.path) void openFile(p.path, { line: Number(p.line) > 0 ? Number(p.line) : undefined })
       if (typeof p.url === 'string' && p.url) openInBrowser(p.url)
     })
@@ -177,7 +201,9 @@ export default {
     ctx.onDispose(disposeTiles)
 
     initBrowser()
-    watchLayout()
+    if (!__CATALOG__) watchLayout()
+    // Catalog build: the Project UI toggle follows the Explorer panel's Run view.
+    else ctx.onDispose($view.listen(() => noteTiles())) // listen, not subscribe: no call at boot, before any tile exists
     void setupIdeWindow()
   }
 }

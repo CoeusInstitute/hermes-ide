@@ -1,12 +1,13 @@
 {
   "name": "hermes-ide",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "description": "Cursor-style IDE plugin for Hermes Desktop",
   "license": "MIT",
   "type": "module",
   "scripts": {
     "build": "node build.mjs",
+    "build:full": "node build.mjs --target=full",
     "watch": "node build.mjs --watch",
     "test": "node --test ../tests/util.test.mjs"
   },

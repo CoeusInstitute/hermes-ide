@@ -1,10 +1,10 @@
 name: hermes-ide
-version: 0.3.0
-description: "Cursor-style IDE for Hermes Desktop: one chat per IDE window with Explorer, tabbed code editor, workspace search, git status and Quick Open as columns you drag into any arrangement; a Browser column that finds, runs and shows your project's UI with an element picker that hands elements and their likely source to the chat; Add-to-Chat, inline edit and agent-edit review (Keep/Undo) wired to the session; IDE chats grouped in the sidebar. One package: desktop UI, backend routes, and an ide_open tool for the agent."
+version: 0.4.0
+description: "Cursor-style IDE for Hermes Desktop: any chat opens in its own IDE window with an Explorer, a tabbed CodeMirror editor, workspace search, git status and Quick Open beside the real session chat, in columns you drag into any arrangement. Finds your project's web UI, runs its dev server after you trust it, and opens the page in the app's Browser, where an element picker hands elements and their likely source lines to the chat. Add to Chat, inline edit and agent-edit review (Keep/Undo) are wired to the session. One package: desktop UI, backend routes on the agent's machine, and an ide_open tool for the agent."
 author: "Coeus Institute"
 license: MIT
 homepage: https://github.com/CoeusInstitute/hermes-ide
-requires_hermes: ">=0.21"
+requires_hermes: ">=0.22.5"
 tags: [desktop, ide, editor, developer-tools]
 provides_tools:
   - ide_open

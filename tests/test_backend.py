@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -33,7 +34,7 @@ api = _load("hermes_ide_plugin_api", ROOT / "dashboard" / "plugin_api.py")
 @pytest.fixture()
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path / "home"))
-    monkeypatch.setattr(api, "_hermes_home", lambda: (tmp_path / "home").resolve())
+    monkeypatch.setattr(api, "_hermes_roots", lambda: [api._canon(tmp_path / "home")])
     app = FastAPI()
     app.include_router(api.router, prefix="/api/plugins/hermes-ide")
     return TestClient(app)
@@ -79,6 +80,64 @@ def test_refuses_relative_paths_and_hermes_credentials(client, tmp_path):
     assert post(client, "/fs/read", path=str(home / "config.yaml")).status_code == 200
 
 
+def test_credential_refusal_holds_for_every_spelling_profile_and_listing(client, tmp_path):
+    home = tmp_path / "home"
+    (home / "profiles" / "work").mkdir(parents=True)
+    (home / "mcp-tokens").mkdir()
+    (home / "hermes-agent" / "agent").mkdir(parents=True)
+    secrets = [home / ".env", home / ".env.bak-20261024", home / "google_token.json", home / "google_client_secret.json",
+               home / "honcho.json", home / ".gmail-app-password", home / "mcp-tokens" / "a.json", home / "profiles" / "work" / ".env"]
+    for f in secrets:
+        f.write_text("OPENROUTER_API_KEY=sk-secret-123\n")
+    spellings = [str(home / ".env").upper() if sys.platform in ("win32", "darwin") else str(home / ".env")]
+    if sys.platform == "win32":
+        spellings += ["\\\\?\\" + str(home / ".env"), "//?/" + str(home / ".env").replace("\\", "/")]
+    for f in [*map(str, secrets), *spellings]:
+        assert post(client, "/fs/read", path=f).status_code == 403, f
+        assert post(client, "/fs/write", path=f, text="x").status_code == 403, f
+    # A source tree kept in the home still opens (the hermes-agent checkout's oauth.py).
+    src = home / "hermes-agent" / "agent" / "oauth.py"
+    src.write_text("token = None\n")
+    assert post(client, "/fs/read", path=str(src)).status_code == 200
+    # Search and Quick Open never surface a credential, even from a folder above the home.
+    for root in (home, tmp_path):
+        hits = post(client, "/search", root=str(root), query="sk-secret").json()["matches"]
+        assert hits == [], hits
+        files = post(client, "/fs/files", root=str(root)).json()["files"]
+        assert not [f for f in files if "secret" in f or ".env" in f or "token" in f.split("/")[-1] and "oauth" not in f], files
+
+
+def test_dev_servers_get_no_credentials(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-x")
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp-x")
+    monkeypatch.setenv("HERMES_HOME", "/h")
+    monkeypatch.setenv("NPM_TOKEN", "npm-x")
+    env = api._child_env()
+    assert "OPENROUTER_API_KEY" not in env and "GITHUB_TOKEN" not in env and "HERMES_HOME" not in env
+    assert env["NPM_TOKEN"] == "npm-x" and env.get("PATH") == os.environ.get("PATH") and env["BROWSER"] == "none"
+
+
+def test_static_server_refuses_dotfiles_and_foreign_hosts():
+    ss = _load("hermes_ide_static_server", ROOT / "dashboard" / "static_server.py")
+    assert ss.allowed("localhost:5173", "/index.html") == 0
+    assert ss.allowed("127.0.0.1:80", "/a/b.css?x=1") == 0
+    assert ss.allowed("[::1]:8000", "/") == 0
+    assert ss.allowed("localhost:5173", "/.env") == 404
+    assert ss.allowed("localhost:5173", "/.git/config") == 404
+    assert ss.allowed("localhost:5173", "/%2egit/config") == 404
+    assert ss.allowed("evil.example:5173", "/index.html") == 403
+    assert ss.allowed("localhost.evil.example", "/") == 403
+
+
+def test_save_of_a_file_deleted_on_disk_is_refused(client, tmp_path):
+    f = tmp_path / "gone.ts"
+    f.write_text("x")
+    mtime = post(client, "/fs/read", path=str(f)).json()["mtime"]
+    f.unlink()
+    r = post(client, "/fs/write", path=str(f), text="y", expected_mtime=mtime)
+    assert r.status_code == 409 and "deleted" in r.json()["detail"] and not f.exists()
+
+
 def test_binary_and_large_files_are_not_returned_as_text(client, tmp_path, monkeypatch):
     b = tmp_path / "img.bin"
     b.write_bytes(b"\x89PNG\x00\x01")
@@ -99,6 +158,9 @@ def test_create_and_rename_never_overwrite(client, tmp_path):
     assert b.read_text() == "keep me"
     assert post(client, "/fs/create", path=str(tmp_path / "pkg"), dir=True).status_code == 200
     assert (tmp_path / "pkg").is_dir()
+    if sys.platform in ("win32", "darwin"):  # a case-only rename is a rename, not a clash
+        assert post(client, "/fs/rename", **{"from": str(b), "to": str(tmp_path / "Other.ts")}).status_code == 200
+        assert [p.name for p in tmp_path.iterdir() if p.name.lower() == "other.ts"] == ["Other.ts"]
 
 
 def test_trash_refuses_instead_of_unlinking(client, tmp_path, monkeypatch):
@@ -204,6 +266,14 @@ def test_detects_node_uis_static_sites_and_managers(client, tmp_path):
     c = post(client, "/project/detect", root=str(mono)).json()["candidates"]
     assert [(x["rel"], x["framework"], x["port"]) for x in c] == [("apps/web", "Next.js", 3000)]
 
+    # A UI dependency alone is no UI: vite only for vitest, a nodemon dev script.
+    tool = _pkg(tmp_path / "tool", {"dev": "nodemon server.js", "test": "vitest"}, {"vite": "5", "vitest": "1"})
+    assert post(client, "/project/detect", root=str(tool)).json()["candidates"] == []
+    # One hop through another script still finds it, and the candidate carries the script text.
+    hop = _pkg(tmp_path / "hop", {"dev": "npm run web", "web": "vite --port 4000"}, {"vite": "5"})
+    c = post(client, "/project/detect", root=str(hop)).json()["candidates"]
+    assert c[0]["framework"] == "Vite" and c[0]["run"] == "npm run web"
+
     # No Node UI: a static index.html is served instead.
     site = tmp_path / "site"
     (site / "public").mkdir(parents=True)
@@ -273,7 +343,8 @@ def test_static_site_serves_and_stops(client, tmp_path):
 
 @pytest.mark.skipif(not shutil.which("npm"), reason="npm not installed")
 def test_node_dev_server_url_from_its_log_and_tree_kill(client, tmp_path):
-    app = _pkg(tmp_path / "web", {"dev": "node server.js"}, {"vite": "5"})
+    # The script must name the framework's command to count as a UI; server.js ignores the argument.
+    app = _pkg(tmp_path / "web", {"dev": "node server.js --as vite"}, {"vite": "5"})
     (app / "node_modules").mkdir()
     (app / "server.js").write_text(
         "const s=require('http').createServer((q,r)=>r.end('node-ui')).listen(0,'127.0.0.1',"

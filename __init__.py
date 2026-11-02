@@ -21,32 +21,36 @@ IDE_OPEN_SCHEMA: dict[str, Any] = {
     "name": "ide_open",
     "description": (
         "Open a file in the Hermes IDE editor inside the Hermes Desktop app, optionally at a line, so the "
-        "user can see or edit it, or open a web page (such as the dev server you just started) in the IDE's "
-        "Browser column. Use when the user asks to open, show or jump to a file, a line or a running UI in "
-        "the IDE. Pass an absolute path or one relative to the session's working directory, or an http(s) url."
+        "user can see or edit it there. Use when the user asks to open, show or jump to a file or a line in "
+        "the IDE. Pass an absolute path or one relative to the session's working directory. A url (such as "
+        "the dev server you just started) is offered in the IDE's project UI view; to show a page in the "
+        "app's Browser pane directly, use the open_preview tool instead."
     ),
     "parameters": {
         "type": "object",
         "properties": {
             "path": {"type": "string", "description": "File path (absolute, or relative to the working directory)."},
             "line": {"type": "integer", "description": "1-based line to reveal.", "minimum": 1},
-            "url": {"type": "string", "description": "http(s) URL to show in the IDE Browser, e.g. http://localhost:5173/."},
+            "url": {"type": "string", "description": "http(s) URL to offer in the IDE, e.g. http://localhost:5173/."},
         },
         "additionalProperties": False,
     },
 }
 
 
-def _resolve(path: str, task_id: str) -> str:
-    """Resolve the way the agent's own file tools do, so 'src/app.ts' means the file it just wrote."""
-    p = path.strip()
-    try:
-        from tools.file_tools_paths import _resolve_path_for_task
+def _resolve(path: str) -> str:
+    """Resolve against the session's working directory (the documented plugin route, not the gateway
+    process's own cwd), so 'src/app.ts' means the file the agent just wrote."""
+    p = os.path.expanduser(path.strip())
+    if not os.path.isabs(p):
+        try:
+            from agent.runtime_cwd import resolve_agent_cwd
 
-        return os.path.realpath(str(_resolve_path_for_task(p, task_id))).replace("\\", "/")
-    except Exception:
-        p = os.path.expanduser(p)
-        return os.path.realpath(p if os.path.isabs(p) else os.path.join(os.getcwd(), p)).replace("\\", "/")
+            base = str(resolve_agent_cwd())
+        except Exception:
+            base = os.getcwd()
+        p = os.path.join(base, p)
+    return os.path.realpath(p).replace("\\", "/")
 
 
 def handle_ide_open(args: dict[str, Any], **kw: Any) -> str:
@@ -60,8 +64,12 @@ def handle_ide_open(args: dict[str, Any], **kw: Any) -> str:
         payload["url"] = url
     elif not isinstance(raw, str) or not raw.strip():
         return json.dumps({"success": False, "error": "pass a path or a url"})
+    elif raw.strip().startswith(("\\\\", "//")):
+        # A network path would make the gateway open an SMB connection (and offer the user's
+        # credentials) to a host a prompt may have named.
+        return json.dumps({"success": False, "error": "network paths are not opened; use a local path"})
     else:
-        path = _resolve(raw, str(kw.get("task_id") or "default"))
+        path = _resolve(raw)
         if not os.path.isfile(path):
             return json.dumps({"success": False, "error": f"not a file: {path}"})
         payload["path"] = path

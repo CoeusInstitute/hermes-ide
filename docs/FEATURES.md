@@ -8,6 +8,34 @@ Wiring legend:
 - **Mirror**: the IDE follows Desktop state (session, folder, theme) and stays in sync with it.
 - **Add**: built by the plugin because Desktop has no equivalent.
 
+## Gate 0.4: catalog-ready, reviewed, hardened (shipped in v0.4, verified in a sandboxed Desktop, 2026-11-02)
+
+v0.4 splits one source into a catalog build (Desktop plugin SDK only) and a full build (`src/full/`), and fixes what a fresh-eyes review of v0.3 found. Evidence is from a sandboxed packaged Desktop at 3840 px driven over CDP with real pointer and keyboard input, `hermes plugins validate`, and the test suites (JS 13, Python 19).
+
+| Feature | Wiring | Verified |
+|---|---|---|
+| The catalog build passes the catalog's admission checks | `__CATALOG__` build constant; markup-reaching code only in `src/full/`, tree-shaken from the catalog bundle | `hermes plugins validate`: **Validation passed**, desktop surface "stays inside the plugin SDK surface"; v0.3 failed with four refusals |
+| Editor without an inline script | `mountEditor(win, send)` mounts CodeMirror from the plugin bundle into a script-free `srcdoc` document | Typing marks the tab dirty, Ctrl+S writes the file, Ctrl+P inside the editor opens Quick Open; the iframe has no `sandbox` attribute and no `<script>` |
+| The IDE window opens through the SDK | `host.openSession(id, {intent: 'window'})`; "chat on screen" from `host.composer.getDraft(null)` | The IDE button opened the claimed pop-out; it maximized to 3840 |
+| The session list hides through the SDK | `host.paneVisibility('sessions')` plus `view.toggleSidebar`, waiting for each toggle | `paneVisibility('sessions')` false after boot |
+| Catalog: Explorer as a panel with its own width | `Workbench`: Explorer panel, the plugin's own splitter, the editor; both stay mounted | Explorer 300 px, editor the rest of its column, at 3840 |
+| Catalog: project UI as a Run view, the page in the app's Browser | Run view in the Explorer panel; a `MessageTextContent` link the user clicks | Static site found, trust prompt, **Run once**, `running`; a real click on the link opened `http://localhost:<port>/` in the app's Browser pane |
+| Catalog: element picker through `ctx.preview` | `capabilities: ['preview.executeJavaScript']`; the app's per-origin consent | The app asked "Let Hermes IDE run scripts on this page? … http://localhost:56852"; after **Allow on this site** a real click on the page's button put its selector, size, text, markup, styles and `likely source: index.html:1` in the composer |
+| Catalog: IDE chats without the session-list group | Clickable `SESSION_ROW_AREAS` badge; status-bar IDE chats menu (SDK `Popover`) | Badge `role=button` on the chat's row; the menu listed "IDE CHATS · 1", the chat, **Open this chat in the IDE**, **New IDE chat** |
+| Credential files refused under every spelling and profile | `_canon` + `_is_secret` over every Hermes root and profile; listings and search filtered | pytest: `\\?\`, `//?/`, upper case, `.env.bak-*`, `google_token.json`, `honcho.json`, `.gmail-app-password`, `mcp-tokens/`, a profile's `.env`: 403 on read and write; search and Quick Open from the home and a folder above it return none; `hermes-agent/agent/oauth.py` still opens |
+| Dev servers get no credentials | `_child_env()` drops `*KEY*`, `*TOKEN*`, `*SECRET*`, `*PASSWORD*`, `HERMES_*` (registry tokens kept) | pytest |
+| A static site does not leak dotfiles | `static_server.py` | Live: `/` 200, `/.env` 404, `/%2eenv` 404, `/.git/config` 404, a folder listing 404, `Host: evil.example` 403 |
+| Trust follows the script | Trust key = folder + command + script text; the Run pill no longer grants trust; Settings lists and revokes | Code review; the banner asks again for a changed script |
+| Rename keeps unsaved edits | `movedOnDisk` re-keys tabs, meta, banners and drafts and sends the frame `rename` | Renamed a dirty `index.html` to `page.html` in the Explorer: the tab followed, still dirty, the text kept; Ctrl+S wrote `page.html` and did not recreate `index.html` |
+| A restored tab whose file is gone closes itself | `openFile` on a 404 for an existing tab | The stale `page.html` tab closed with an info note instead of an error on every open |
+| Saving a deleted file asks first | `409 deleted`; a second save writes it back on purpose | pytest |
+| Draft typed against an older file version | Draft keeps its base mtime; a mismatch opens a conflict banner and keeps the base for the save check | Code review |
+| Full build: a foreign zone no longer squeezes the columns | `columnWidths` plans a zone the IDE does not own like the Browser column, sharing its room | With the app's Browser pane restored at half the screen: Explorer 340, Editor 1510, Browser 615, chat 845, app pane 530 |
+| Full build: the sidebar group still works on the shared data layer | `ide-chats.ts` rows; group hides only rows it lists | Date-grouped list: group mounted, one row, its date-group row hidden |
+| Detection without false positives | The script must run the framework's command (one `npm run` hop allowed); meta-frameworks need the dependency; Electron scripts skipped | pytest: vite-only-for-vitest and a nodemon dev script are not UIs; `npm run web` → `vite --port 4000` is |
+| Mixed line endings | Dominant line ending; the editor normalizes to it | Unit test |
+| No dead Terminal toggle | The SDK allows no terminal action; the toggle is gone, the editor's Ctrl+J explains the app's own key | Toggles: Explorer, Editor, Project UI |
+
 ## Gate 0.3: columns you arrange, the project's UI, IDE chats in the sidebar (shipped in v0.3, verified in a sandboxed Desktop, 2026-11-02)
 
 Evidence is from a sandboxed packaged Desktop at 3840 px driven over CDP with real pointer and keyboard input, against a real Vite project whose dependencies were not installed at the start.
@@ -121,13 +149,16 @@ Ordered by the gap against the reference screenshot (see docs/RESEARCH.md sectio
 
 | Item | Why | Acceptance test |
 |---|---|---|
-| Ask the Desktop SDK for a session-list group door (`sidebar.sessionGroups`) | The IDE group is placed by DOM markers today | The group renders through the SDK; no DOM anchors |
-| Ask for a door to size a split (`host.setPaneShare`) | Column sizing drags the app's sash today | Columns size with no synthetic pointer events |
+| Ask the Desktop SDK for a session-list group door (`sidebar.sessionGroups`) | The IDE group exists only in the full build (DOM markers) | The group renders through the SDK in the catalog build |
+| Ask for a door to size a split (`host.setPaneShare`) and a size hint for `host.openWorkspace` | Column sizing exists only in the full build (synthetic sash drags) | Columns size with no synthetic pointer events, in both builds |
+| Ask for `ctx.preview.open(url)` | The catalog build opens the dev server's page from a link the user clicks | The page opens in the app's Browser as soon as the server is up |
+| Ask for a window verb on `host` (maximize) | The one raw bridge call in the catalog build | No `window.hermesDesktop` in the catalog bundle |
 | Open the picked element's source in the editor | v0.3 sends likely source lines to the chat; jumping to them in the editor is next | Picking an element opens its best match at the line |
 | Python web UIs (Streamlit, Flask, Django, Gradio) in project detection | v0.3 detects Node and static UIs only | A Streamlit app is found and starts |
 | Ask for a plugin door to set a draft chat's folder | Starts a new chat in the IDE's folder | A new chat's first turn runs in the opened folder |
 | Ask for a keybind scope for focused plugin surfaces | Would allow an in-DOM editor later; the frame works today | Not blocking |
-| Publish: make the repo public, tag releases, submit to the Hermes plugin catalog | One-click installs for anyone | `hermes plugins install hermes-ide` from the catalog |
+| Publish: make the repo public, open the catalog PR (prepared in docs/CATALOG-SUBMISSION.md) | One-click installs for anyone | `hermes plugins install hermes-ide` from the catalog |
+| Explorer keyboard model (roving tabindex tree, F2, Delete), non-UTF-8 files, Python UIs | From the v0.4 review | Arrow keys move in the tree; a Latin-1 file round-trips; a Streamlit app is found |
 
 ## Explicit non-goals
 

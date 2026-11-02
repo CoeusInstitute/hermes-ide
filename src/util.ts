@@ -104,8 +104,11 @@ export function splitLineSuffix(input: string): { query: string; line?: number; 
   return m ? { query: m[1], line: Number(m[2]), col: m[3] ? Number(m[3]) : undefined } : { query: input.trim() }
 }
 
+/** The file's dominant line ending (a mostly-LF file with one stray CRLF is an LF file). */
 export function detectEol(text: string): '\r\n' | '\n' {
-  return text.includes('\r\n') ? '\r\n' : '\n'
+  const crlf = text.split('\r\n').length - 1
+  const lf = text.split('\n').length - 1 - crlf
+  return crlf > lf ? '\r\n' : '\n'
 }
 
 /** Paths a finished tool call may have written, from its arguments. Tool names vary (write_file,
@@ -208,13 +211,17 @@ export function dockPlan(layout: Layout, open: readonly TileId[]): DockStep[] {
 }
 
 /** Target width (px) of each column, or null for the one that takes the rest (the editor, or the
- *  chat when the editor is closed). Saved fractions win over the plan. */
+ *  chat when the editor is closed). Saved fractions win over the plan. A column the IDE does not
+ *  own (null: the app's own Browser pane) is browser-like: it shares the Browser column's planned
+ *  room with it, so neither squeezes the editor. */
 export function columnWidths(columns: Array<ColumnId | null>, width: number, saved: Layout['widths'] = {}): Array<number | null> {
   const plan = columnPlan(width)
-  const planned: Record<ColumnId, number> = { explorer: plan.explorer, chat: plan.chat, browser: plan.preview, editor: 0 }
+  const shares = Math.max(1, columns.filter(id => id === 'browser' || !id).length)
+  const planned: Record<ColumnId, number> = { explorer: plan.explorer, chat: plan.chat, browser: Math.round(plan.preview / shares), editor: 0 }
   const flex = columns.includes('editor') ? 'editor' : columns.includes('chat') ? 'chat' : null
   return columns.map(id => {
-    if (!id || id === flex) return null
+    if (id && id === flex) return null
+    if (!id) return planned.browser
     const f = saved[id]
     return typeof f === 'number' && f > 0.04 && f < 0.9 ? Math.round(f * width) : planned[id]
   })
