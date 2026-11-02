@@ -34,6 +34,8 @@ In a chat, press **Ctrl+Alt+I**, click **IDE** in the status bar, or run **IDE: 
 
 The IDE window maximizes on the screen it opens on and sizes its columns to that screen: Explorer about 14% (220 to 340 px), chat about 30% (380 to 760 px, never below the app's own minimum chat width), editor the rest. A rendered page opens as a preview column of about a third of the window, taking its space from the editor; closing it gives the space back. Drag any seam to change a size; double-click the Explorer seam to reset it. If the chat already has a plain pop-out window, that window turns into the IDE instead of a second window opening.
 
+Columns are told apart the way Cursor does it, with colours from your theme only: the Explorer sits on the theme's sidebar surface (darkest), the chat on its chrome surface, and the editor on its elevated surface (lightest), with a full-height 1px divider in the theme's base colour at 18% at every column edge. The active editor tab takes the editor's tone, so it reads as part of the editor; inactive tabs sit on the darker strip. This styling applies only in the IDE window; the main window keeps the app's look.
+
 The Explorer opens the chat's working directory; **Open Folder…** opens another one and, by default, moves the chat there too.
 
 | Keys (in the editor) | Action |

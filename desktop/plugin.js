@@ -669,9 +669,13 @@ function hideSessionList() {
   let list = document.querySelector('[data-tree-group="grp-sessions"]');
   list && list.getBoundingClientRect().width > 0 && ctx.runAction?.("view.toggleSidebar");
 }
+function styleIdeWindow() {
+  let el = document.createElement("style");
+  el.id = "hermes-ide-window", el.textContent = '[data-sash-overlap] > span:first-child{opacity:1 !important;transform:none !important;translate:none !important;background:color-mix(in srgb,var(--ui-base) 18%,transparent) !important}[data-tree-group="grp-main"]{background:var(--ui-bg-chrome)}', document.head.append(el), ctx.onDispose(() => el.remove());
+}
 async function setupIdeWindow() {
   let bridge = window.hermesDesktop;
-  !sessionStorage.getItem("hermes-ide:sized") && window.outerWidth < screen.availWidth * 0.85 && (sessionStorage.setItem("hermes-ide:sized", "1"), bridge?.windowControls?.toggleMaximize?.()), ensureEditor(), await sizeSettled(), hideSessionList(), await frames(2), await fitColumns();
+  !sessionStorage.getItem("hermes-ide:sized") && window.outerWidth < screen.availWidth * 0.85 && (sessionStorage.setItem("hermes-ide:sized", "1"), bridge?.windowControls?.toggleMaximize?.()), ensureEditor(), styleIdeWindow(), await sizeSettled(), hideSessionList(), await frames(2), await fitColumns();
   let pending = sessionStorage.getItem(PENDING_OPEN);
   if (pending) {
     sessionStorage.removeItem(PENDING_OPEN);
@@ -843,10 +847,10 @@ var STYLES = `
 .hi-hit{padding-left:26px}
 .hi-hit mark{background:color-mix(in srgb,var(--ui-yellow) 35%,transparent);color:inherit;border-radius:2px}
 .hi-empty{padding:16px 14px;color:var(--ui-text-tertiary);line-height:1.5}
-.hi-tabs{display:flex;flex:none;overflow-x:auto;scrollbar-width:none;border-bottom:1px solid var(--ui-stroke-tertiary);min-height:33px}
-.hi-tab{position:relative;display:flex;align-items:center;gap:6px;height:33px;padding:0 6px 0 12px;border-right:1px solid var(--ui-stroke-tertiary);color:var(--ui-text-tertiary);cursor:pointer;white-space:nowrap;font-size:12px;user-select:none}
+.hi-tabs{display:flex;flex:none;overflow-x:auto;scrollbar-width:none;min-height:33px;background:var(--hi-tone-side);box-shadow:inset 0 -1px 0 var(--ui-stroke-secondary)}
+.hi-tab{position:relative;display:flex;align-items:center;gap:6px;height:33px;padding:0 6px 0 12px;border-right:1px solid var(--ui-stroke-secondary);color:var(--ui-text-tertiary);cursor:pointer;white-space:nowrap;font-size:12px;user-select:none}
 .hi-tab:hover{color:var(--ui-text-secondary)}
-.hi-tab[data-active=true]{color:var(--ui-text-primary);background:var(--ui-row-hover-background)}
+.hi-tab[data-active=true]{color:var(--ui-text-primary);background:var(--hi-tone-editor)}
 .hi-tab[data-active=true]::after{content:"";position:absolute;left:0;right:0;top:0;height:1.5px;background:var(--ui-accent)}
 .hi-tab[data-preview=true] .hi-tabname{font-style:italic}
 .hi-tab .hi-x{width:18px;height:18px;min-width:18px;visibility:hidden}
@@ -867,9 +871,14 @@ var STYLES = `
 .hi-qo-row[data-on=true]{background:var(--ui-row-active-background);color:var(--ui-text-primary)}
 .hi-status{display:inline-flex;gap:10px;align-items:center;padding:0 6px;font-size:.6875rem;color:var(--ui-text-tertiary);white-space:nowrap}
 .hi-card{display:inline-flex;align-items:center;gap:8px;margin:4px 0;padding:6px 10px;border:1px solid var(--ui-stroke-secondary);border-radius:8px;font-size:12.5px;color:var(--ui-text-primary);background:none;cursor:pointer;font-family:var(--font-mono)}
-.hi-ide{display:flex;height:100%;min-height:0;min-width:0}
-.hi-ide-side{flex:none;min-width:0;height:100%;border-right:1px solid var(--ui-stroke-tertiary)}
-.hi-ide-main{flex:1;min-width:0;height:100%}
+/* Column dividers: the theme's base (text) colour at 18%, a neutral line visible on every tone; the
+   theme strokes are accent-tinted and nearly invisible on dark surfaces. Column tones, Cursor's order: Explorer darkest, chat in between (the app's own chrome tone), editor
+   lightest. Opaque theme surfaces on purpose: glass skins make the *-surface-background roles
+   transparent, which would let every column show the same window backing. */
+.hi-ide{--hi-tone-side:var(--ui-bg-sidebar);--hi-tone-editor:var(--ui-bg-elevated,var(--ui-bg-editor));--hi-divider:color-mix(in srgb,var(--ui-base) 18%,transparent);display:flex;height:100%;min-height:0;min-width:0;background:var(--hi-tone-editor)}
+.hi-ide-side{flex:none;min-width:0;height:100%;background:var(--hi-tone-side);border-right:1px solid var(--hi-divider)}
+.hi-ide-side .hi-views{border-bottom-color:var(--ui-stroke-secondary)}
+.hi-ide-main{flex:1;min-width:0;height:100%;background:var(--hi-tone-editor)}
 .hi-ide-sash{flex:none;width:5px;margin:0 -3px 0 -2px;z-index:2;cursor:col-resize;position:relative}
 .hi-ide-sash:hover,.hi-ide[data-drag=true] .hi-ide-sash{background:color-mix(in srgb,var(--ui-accent) 45%,transparent)}
 .hi-ide[data-drag=true]{cursor:col-resize;user-select:none}

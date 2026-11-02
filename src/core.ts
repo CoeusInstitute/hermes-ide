@@ -1120,6 +1120,20 @@ function hideSessionList() {
   }
 }
 
+/** IDE window only: the app draws its zone seams at 10% so a chat window stays calm; an IDE needs
+ *  its columns readable at a glance (Cursor draws a full 1px line), so draw them at full strength in
+ *  the same neutral divider the IDE tile uses (theme base colour at 18%). Removed with the plugin. */
+function styleIdeWindow() {
+  const el = document.createElement('style')
+  el.id = 'hermes-ide-window'
+  el.textContent =
+    '[data-sash-overlap] > span:first-child{opacity:1 !important;transform:none !important;translate:none !important;background:color-mix(in srgb,var(--ui-base) 18%,transparent) !important}' +
+    // The chat is the middle tone between the Explorer and the editor; glass skins leave it clear.
+    '[data-tree-group="grp-main"]{background:var(--ui-bg-chrome)}'
+  document.head.append(el)
+  ctx.onDispose(() => el.remove())
+}
+
 /** IDE window boot: take the room an IDE needs, show the IDE beside the chat, size the columns. */
 export async function setupIdeWindow() {
   const bridge = (window as any).hermesDesktop
@@ -1129,6 +1143,7 @@ export async function setupIdeWindow() {
     bridge?.windowControls?.toggleMaximize?.()
   }
   ensureEditor()
+  styleIdeWindow()
   await sizeSettled()
   hideSessionList()
   await frames(2)
