@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { addressToUrl, columnPlan, columnWidths, DEFAULT_LAYOUT, detectEol, dockPlan, expandPickTokens, fileRef, fuzzyScore, isInside, normalizeLayout, pathOrUrl, pathsFromToolArgs, rankFiles, relPath, splitLineSuffix } from '../src/util.ts'
+import { addressToUrl, columnPlan, columnWidths, DEFAULT_LAYOUT, detectEol, dockPlan, expandPickTokens, fileRef, fuzzyScore, isInside, normalizeLayout, pathOrUrl, pathsFromToolArgs, rankFiles, relPath, splitLineSuffix, widthsFor } from '../src/util.ts'
 
 test('fileRef emits the @file syntax Hermes expands, relative to the workspace', () => {
   assert.equal(fileRef('D:/proj/src/app.ts', 'D:/proj'), '@file:src/app.ts')
@@ -80,6 +80,30 @@ test('normalizeLayout tolerates junk and places tiles the saved layout never saw
   assert.deepEqual(normalizeLayout({ columns: [['chat']], widths: {} }, ['explorer', 'editor', 'browser']), [['explorer'], ['editor'], ['browser'], ['chat']])
   assert.deepEqual(normalizeLayout({ columns: 'x', widths: {} }, ['editor']), [['editor'], ['chat']])
   assert.deepEqual(normalizeLayout({ columns: [['editor', 'editor'], ['nope'], []], widths: {} }, ['editor']), [['editor'], ['chat']])
+})
+
+test('a file opened later docks the editor beside the Explorer, not between the page and the chat', () => {
+  // The arrangement a new IDE workspace saves before any file is open.
+  const saved = { columns: [['explorer'], ['browser'], ['chat']], widths: { explorer: 0.091, browser: 0.482, chat: 0.427 } }
+  assert.deepEqual(normalizeLayout(saved, ['explorer', 'browser', 'editor']), [['explorer'], ['editor'], ['browser'], ['chat']])
+  assert.deepEqual(dockPlan(saved, ['explorer', 'browser', 'editor']).find(s => s.id === 'editor'), {
+    id: 'editor',
+    dock: { pane: 'plugin-workspace:hermes-ide-browser', pos: 'left' }
+  })
+  // No Explorer: the editor still goes where the default order has it, ahead of the page.
+  assert.deepEqual(normalizeLayout({ columns: [['browser'], ['chat']], widths: {} }, ['browser', 'editor']), [['editor'], ['browser'], ['chat']])
+})
+
+test('widthsFor: widths saved for another set of columns do not apply, except the Explorer', () => {
+  const saved = { columns: [['explorer'], ['browser'], ['chat']], widths: { explorer: 0.091, browser: 0.482, chat: 0.427 } }
+  // The editor opened: the page/chat split of the three-column window is stale.
+  assert.deepEqual(widthsFor(saved, [['explorer'], ['editor'], ['browser'], ['chat']]), { explorer: 0.091 })
+  // Same columns in another order (the user dragged one): every width still applies.
+  assert.deepEqual(widthsFor(saved, [['chat'], ['explorer'], ['browser']]), saved.widths)
+  // The fit then gives the editor the rest instead of its floor.
+  const widths = columnWidths(['explorer', 'editor', 'browser', 'chat'], 3840, widthsFor(saved, [['explorer'], ['editor'], ['browser'], ['chat']]))
+  assert.deepEqual(widths, [349, null, 1229, 760])
+  assert.ok(3840 - 349 - 1229 - 760 > 1229, 'the editor is the widest column')
 })
 
 test('columnWidths: plan by default, saved fractions win, the editor takes the rest', () => {

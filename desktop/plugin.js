@@ -106,12 +106,26 @@ var TILE_IDS = ["explorer", "editor", "browser"], DEFAULT_LAYOUT = { columns: [[
 function normalizeLayout(layout, open) {
   let want = /* @__PURE__ */ new Set([...open, "chat"]), seen = /* @__PURE__ */ new Set(), cols = (Array.isArray(layout?.columns) ? layout.columns : []).map((col) => (Array.isArray(col) ? col : []).filter((id2) => want.has(id2) && !seen.has(id2) && (seen.add(id2), !0))).filter((col) => col.length);
   seen.has("chat") || cols.push(["chat"]);
+  let order = DEFAULT_LAYOUT.columns.flat();
   for (let id2 of TILE_IDS) {
     if (!want.has(id2) || seen.has(id2)) continue;
-    let chatAt = cols.findIndex((col) => col.includes("chat"));
-    cols.splice(id2 === "explorer" ? 0 : chatAt, 0, [id2]);
+    let at = 0;
+    for (let before of order.slice(0, order.indexOf(id2)).reverse()) {
+      let k = cols.findIndex((col) => col.includes(before));
+      if (k >= 0) {
+        at = k + 1;
+        break;
+      }
+    }
+    cols.splice(at, 0, [id2]), seen.add(id2);
   }
   return cols;
+}
+function columnSet(columns) {
+  return columns.map((col) => [...col].sort().join("+")).sort().join("|");
+}
+function widthsFor(layout, columns) {
+  return columnSet(layout.columns) === columnSet(columns) ? layout.widths : typeof layout.widths.explorer == "number" ? { explorer: layout.widths.explorer } : {};
 }
 function dockPlan(layout, open) {
   let cols = normalizeLayout(layout, open), c2 = cols.findIndex((col) => col.includes("chat")), steps = [], anchor = (k) => k === c2 ? "workspace" : tilePane(cols[k][0]), place = (k, pos) => {
@@ -197,7 +211,7 @@ function fullSaveLayout() {
   if (!layout) return;
   let prev = savedLayout();
   if (JSON.stringify(layout.columns) !== JSON.stringify(prev.columns)) {
-    writePerChat("layout", { columns: layout.columns, widths: prev.widths }), lastSaved = "", fitColumns().then(fullSaveLayout);
+    writePerChat("layout", { columns: layout.columns, widths: widthsFor(prev, layout.columns) }), lastSaved = "", fitColumns().then(fullSaveLayout);
     return;
   }
   let json2 = JSON.stringify(layout);
@@ -213,7 +227,7 @@ async function fitColumns() {
     layoutState.fitting = !0;
     try {
       await frames(3), fittedOnce = !0;
-      let W = window.innerWidth, saved = savedLayout().widths, measure = () => readColumns(), cols = measure(), ids = cols.map((c2) => c2.ids.includes("editor") ? "editor" : c2.ids.includes("chat") ? "chat" : c2.ids[0] ?? null), widths = columnWidths(ids, W, saved), flex = widths.indexOf(null);
+      let W = window.innerWidth, now = captureLayout(), saved = now ? widthsFor(savedLayout(), now.columns) : savedLayout().widths, measure = () => readColumns(), cols = measure(), ids = cols.map((c2) => c2.ids.includes("editor") ? "editor" : c2.ids.includes("chat") ? "chat" : c2.ids[0] ?? null), widths = columnWidths(ids, W, saved), flex = widths.indexOf(null);
       if (flex < 0) return;
       for (let k = 0; k < flex; k++) {
         let edge = cols[k].left + cols[k].width, target = cols[k].left + widths[k];

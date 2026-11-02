@@ -7,7 +7,7 @@
 // and keeps the app's own split. Upgrade each piece to a host door when the SDK ships one.
 
 import { $browserNav, $openTiles, ctx, frames, IDE_WINDOW, layoutState, savedLayout, writePerChat } from '../core'
-import { type ColumnId, columnWidths, type Layout, TILE_IDS } from '../util'
+import { type ColumnId, columnWidths, type Layout, TILE_IDS, widthsFor } from '../util'
 
 /** Move the app's split seam at `edge` (window x) to `target`. shortcut: the SDK has no door to
  *  size a split, so this drags the app's own sash with synthetic pointer events (tree-split.tsx
@@ -101,9 +101,11 @@ export function fullSaveLayout() {
   if (!layout) return
   const prev = savedLayout()
   if (JSON.stringify(layout.columns) !== JSON.stringify(prev.columns)) {
-    // A column moved: the app re-splits the window evenly after a move, so keep each column's
-    // own width (keyed by column, not position) and refit before recording widths again.
-    writePerChat('layout', { columns: layout.columns, widths: prev.widths })
+    // A column moved, opened or closed. The app re-splits the window evenly after a move, so keep
+    // each column's own width (keyed by column, not position) and refit before recording widths
+    // again. A column opened or closed changes the set: widths recorded for the old set no longer
+    // apply (widthsFor), so the refit sizes the new set from the plan.
+    writePerChat('layout', { columns: layout.columns, widths: widthsFor(prev, layout.columns) })
     lastSaved = ''
     void fitColumns().then(fullSaveLayout)
     return
@@ -131,7 +133,10 @@ export async function fitColumns(): Promise<void> {
     await frames(3)
     fittedOnce = true
     const W = window.innerWidth
-    const saved = savedLayout().widths
+    // Only widths recorded for the columns open now: a window that just gained or lost a column
+    // is sized from the plan (the Explorer keeps its width).
+    const now = captureLayout()
+    const saved = now ? widthsFor(savedLayout(), now.columns) : savedLayout().widths
     const measure = () => readColumns()
     let cols = measure()
     // A zone the IDE does not own (null: the app's own Browser pane, opened by the agent) gets a

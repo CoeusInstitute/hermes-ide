@@ -176,7 +176,8 @@ export interface DockStep {
 }
 
 /** Keep only `open` tiles (plus the chat), drop empty columns, and place open tiles the layout
- *  does not know: the Explorer leftmost, the editor and browser just left of the chat. */
+ *  does not know where a fresh layout has them: just right of the nearest column that comes
+ *  before them in the default order (the Explorer leftmost, the editor beside the Explorer). */
 export function normalizeLayout(layout: Layout, open: readonly TileId[]): ColumnId[][] {
   const want = new Set<ColumnId>([...open, 'chat'])
   const seen = new Set<ColumnId>()
@@ -184,12 +185,38 @@ export function normalizeLayout(layout: Layout, open: readonly TileId[]): Column
     .map(col => (Array.isArray(col) ? col : []).filter(id => want.has(id) && !seen.has(id) && (seen.add(id), true)))
     .filter(col => col.length)
   if (!seen.has('chat')) cols.push(['chat'])
+  const order = DEFAULT_LAYOUT.columns.flat()
   for (const id of TILE_IDS) {
     if (!want.has(id) || seen.has(id)) continue
-    const chatAt = cols.findIndex(col => col.includes('chat'))
-    cols.splice(id === 'explorer' ? 0 : chatAt, 0, [id])
+    let at = 0
+    for (const before of order.slice(0, order.indexOf(id)).reverse()) {
+      const k = cols.findIndex(col => col.includes(before))
+      if (k >= 0) {
+        at = k + 1
+        break
+      }
+    }
+    cols.splice(at, 0, [id])
+    seen.add(id)
   }
   return cols
+}
+
+/** A layout's columns as a set: the same tiles in the same stacks, in any order. */
+export function columnSet(columns: readonly ColumnId[][]): string {
+  return columns
+    .map(col => [...col].sort().join('+'))
+    .sort()
+    .join('|')
+}
+
+/** The saved widths that still apply to the columns open now. Widths are recorded for one set of
+ *  columns: the IDE's own fit of a window without the editor is not the user's choice once the
+ *  editor opens, and re-applying it squeezes the editor to its floor. So they carry over only while
+ *  the set is unchanged (a column dragged elsewhere keeps its width); the Explorer's is its own. */
+export function widthsFor(layout: Layout, columns: readonly ColumnId[][]): Layout['widths'] {
+  if (columnSet(layout.columns) === columnSet(columns)) return layout.widths
+  return typeof layout.widths.explorer === 'number' ? { explorer: layout.widths.explorer } : {}
 }
 
 /** The order to open tiles in, and where to dock each, so the app's pane tree reproduces the
