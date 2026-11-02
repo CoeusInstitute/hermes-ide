@@ -3,7 +3,7 @@
   "label": "Hermes IDE",
   "description": "Backend routes for the Hermes IDE desktop plugin (file system, search, git, preview).",
   "icon": "Code",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "tab": { "path": "/hermes-ide", "hidden": true },
   "entry": "dist/index.js",
   "api": "plugin_api.py"

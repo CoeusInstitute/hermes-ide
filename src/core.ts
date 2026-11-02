@@ -914,15 +914,18 @@ export async function openIdeWindow(open?: { path?: string; line?: number; sid?:
   }
   const focused = host.state.focusedStoredSessionId.get()
   // The IDE opens the chat you are looking at. On a page such as Capabilities the app still keeps
-  // a "focused" session (the first tile), which is not what the user means, so require the route
-  // to be that chat. An agent request names its own session and skips this check.
-  const routed = /^#\/([^/?#]+)/.exec(location.hash)?.[1]
-  const sid = open?.sid ?? (routed && decodeURIComponent(routed) === focused ? focused : null)
+  // a "focused" session (the first tile), which is not what the user means, so require a chat on
+  // screen: its composer is visible. (The route id is no test: a compacted chat continues under a
+  // new stored id while the route can keep an earlier one.) An agent request names its own session.
+  const chatOnScreen = [...document.querySelectorAll<HTMLElement>('[contenteditable="true"]')].some(
+    el => !el.closest('.hi-ide, [role="dialog"]') && el.getBoundingClientRect().width > 0
+  )
+  const sid = open?.sid ?? (chatOnScreen ? focused : null)
   const bridge = (window as any).hermesDesktop
   if (!sid) {
     notify(
       'info',
-      focused && routed ? 'Open the chat you want in the IDE, then click IDE.' : 'Send the first message in this chat, then open it in the IDE.',
+      chatOnScreen ? 'Send the first message in this chat, then open it in the IDE.' : 'Open the chat you want in the IDE, then click IDE.',
       'Hermes IDE'
     )
     return

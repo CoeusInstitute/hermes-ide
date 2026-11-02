@@ -553,11 +553,13 @@ async function openIdeWindow(open) {
     showIde();
     return;
   }
-  let focused = host.state.focusedStoredSessionId.get(), routed = /^#\/([^/?#]+)/.exec(location.hash)?.[1], sid = open?.sid ?? (routed && decodeURIComponent(routed) === focused ? focused : null), bridge = window.hermesDesktop;
+  let focused = host.state.focusedStoredSessionId.get(), chatOnScreen = [...document.querySelectorAll('[contenteditable="true"]')].some(
+    (el) => !el.closest('.hi-ide, [role="dialog"]') && el.getBoundingClientRect().width > 0
+  ), sid = open?.sid ?? (chatOnScreen ? focused : null), bridge = window.hermesDesktop;
   if (!sid) {
     notify(
       "info",
-      focused && routed ? "Open the chat you want in the IDE, then click IDE." : "Send the first message in this chat, then open it in the IDE.",
+      chatOnScreen ? "Send the first message in this chat, then open it in the IDE." : "Open the chat you want in the IDE, then click IDE.",
       "Hermes IDE"
     );
     return;
