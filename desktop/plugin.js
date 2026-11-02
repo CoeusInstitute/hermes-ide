@@ -99,7 +99,7 @@ function pathsFromToolArgs(args) {
   return visit(args, "", 0), [...out];
 }
 function columnPlan(width) {
-  let explorer = Math.round(Math.min(340, Math.max(220, width * 0.14))), chat = Math.round(Math.min(760, Math.max(380, width * 0.3))), preview = Math.round(Math.min(1280, Math.max(520, width * 0.32)));
+  let explorer = Math.round(Math.min(300, Math.max(220, width * 0.14))), chat = Math.round(Math.min(760, Math.max(380, width * 0.3))), preview = Math.round(Math.min(1280, Math.max(520, width * 0.32)));
   return { explorer, chat, preview };
 }
 var TILE_IDS = ["explorer", "editor", "browser"], DEFAULT_LAYOUT = { columns: [["explorer"], ["editor"], ["browser"], ["chat"]], widths: {} }, tilePane = (id2) => id2 === "chat" ? "workspace" : `plugin-workspace:hermes-ide-${id2}`;
@@ -125,13 +125,16 @@ function dockPlan(layout, open) {
   return steps;
 }
 function columnWidths(columns, width, saved = {}) {
-  let plan = columnPlan(width), shares = Math.max(1, columns.filter((id2) => id2 === "browser" || !id2).length), planned = { explorer: plan.explorer, chat: plan.chat, browser: Math.round(plan.preview / shares), editor: 0 }, flex = columns.includes("editor") ? "editor" : columns.includes("chat") ? "chat" : null;
-  return columns.map((id2) => {
-    if (id2 && id2 === flex) return null;
-    if (!id2) return planned.browser;
-    let f = saved[id2];
-    return typeof f == "number" && f > 0.04 && f < 0.9 ? Math.round(f * width) : planned[id2];
-  });
+  let plan = columnPlan(width), shares = Math.max(1, columns.filter((id2) => id2 === "browser" || !id2).length), planned = { explorer: plan.explorer, chat: plan.chat, browser: Math.round(plan.preview / shares), editor: 0 }, flex = columns.includes("editor") ? "editor" : columns.includes("browser") ? "browser" : columns.includes("chat") ? "chat" : null, pagePair = flex === "browser" && columns.includes("chat");
+  if (pagePair) {
+    let rest = width - columns.reduce((sum, id2) => sum + (id2 ? id2 !== "browser" && id2 !== "chat" ? sizeOf(id2) : 0 : planned.browser), 0);
+    planned.chat = Math.round(rest * 0.47);
+  }
+  function sizeOf(id2) {
+    let f = saved[id2], px = typeof f == "number" && f > 0.04 && f < 0.9 ? Math.round(f * width) : null;
+    return px === null || id2 === "explorer" && (px < 180 || px > 600) ? planned[id2] : px;
+  }
+  return columns.map((id2) => id2 && id2 === flex ? null : id2 ? pagePair && id2 === "chat" ? planned.chat : sizeOf(id2) : planned.browser);
 }
 var HAS_SCHEME = /^[a-z][a-z0-9+.-]*:\/\//i, BARE_SCHEME = /^(about|data):/i;
 function addressToUrl(input) {
@@ -140,6 +143,12 @@ function addressToUrl(input) {
 }
 function pathOrUrl(target) {
   return HAS_SCHEME.test(target) || BARE_SCHEME.test(target) ? target : "file:///" + normPath(target).replace(/^\/+/, "").split("/").map(encodeURIComponent).join("/").replace(/^([a-z])%3A/i, "$1:");
+}
+var PICK_TOKEN_RE = /\[\[ element (\d+) · [^\]\n]*\]\]/g;
+function expandPickTokens(text, blocks) {
+  return text.includes("[[ element ") ? text.replace(PICK_TOKEN_RE, (token, id2) => blocks[id2] ? `
+${blocks[id2]}
+` : token) : text;
 }
 
 // src/full/layout.ts
@@ -181,9 +190,9 @@ function captureLayout() {
   for (let c2 of cols) for (let id2 of c2.ids) widths[id2] = Math.round(c2.width / W * 1e3) / 1e3;
   return { columns: cols.map((c2) => c2.ids), widths };
 }
-var lastSaved = "";
+var lastSaved = "", fittedOnce = !1;
 function fullSaveLayout() {
-  if (!IDE_WINDOW || !layoutState.ready || layoutState.fitting) return;
+  if (!IDE_WINDOW || !layoutState.ready || layoutState.fitting || !fittedOnce) return;
   let layout = captureLayout();
   if (!layout) return;
   let prev = savedLayout();
@@ -203,7 +212,7 @@ async function fitColumns() {
     }
     layoutState.fitting = !0;
     try {
-      await frames(3);
+      await frames(3), fittedOnce = !0;
       let W = window.innerWidth, saved = savedLayout().widths, measure = () => readColumns(), cols = measure(), ids = cols.map((c2) => c2.ids.includes("editor") ? "editor" : c2.ids.includes("chat") ? "chat" : c2.ids[0] ?? null), widths = columnWidths(ids, W, saved), flex = widths.indexOf(null);
       if (flex < 0) return;
       for (let k = 0; k < flex; k++) {
@@ -372,7 +381,7 @@ function writePerChat(key, value) {
 }
 function savedTiles() {
   let v = readPerChat("tiles");
-  return Array.isArray(v) ? TILE_IDS.filter((id2) => v.includes(id2)) : ["explorer", "editor"];
+  return Array.isArray(v) ? TILE_IDS.filter((id2) => v.includes(id2)) : ["explorer"];
 }
 function noteTiles() {
   let open = TILE_IDS.filter(isTileOpen);
@@ -629,7 +638,9 @@ async function canonical(path) {
   }
 }
 async function syncRoot() {
-  let picked = ctx.storage.get(`root:${sessionKey}`, null), cwd = normPath(host.state.cwd.get() || ""), target = picked || ($settings.get().followSession ? cwd : $root.get() || cwd);
+  let picked = ctx.storage.get(`root:${sessionKey}`, null), cwd = normPath(host.state.cwd.get() || "");
+  picked && cwd && pathKey(cwd) === pathKey(picked) && (ctx.storage.remove(`root:${sessionKey}`), picked = null);
+  let target = picked || ($settings.get().followSession ? cwd : $root.get() || cwd);
   if ($rootPicked.set(!!picked), !target) {
     $root.set(null);
     return;
@@ -645,7 +656,7 @@ async function setRoot(path, applyToSession) {
   let sid = host.state.focusedSessionId.get();
   if (applyToSession && sid)
     try {
-      await host.request("session.cwd.set", { session_id: sid, cwd: root }), ctx.storage.remove(`root:${sessionKey}`), $rootPicked.set(!1);
+      await host.request("session.cwd.set", { session_id: sid, cwd: root });
     } catch (e) {
       notify("warning", `The IDE opened ${baseName(root)}, but the chat stays in its folder: ${e.message}`);
     }
@@ -718,7 +729,7 @@ async function applyPendingCwd() {
   let p = pendingCwd, sid = host.state.focusedSessionId.get();
   if (!(!p || !sid || host.state.focusedStoredSessionId.get() !== p.stored))
     try {
-      await host.request("session.cwd.set", { session_id: sid, cwd: p.cwd }), pendingCwd = null, ctx.storage.remove(`root:${p.stored}`), $rootPicked.set(!1), notify("info", `This chat now works in ${baseName(p.cwd)}.`);
+      await host.request("session.cwd.set", { session_id: sid, cwd: p.cwd }), pendingCwd = null, notify("info", `This chat now works in ${baseName(p.cwd)}.`);
     } catch {
     }
 }
@@ -754,7 +765,7 @@ function showIde() {
     openIdeWindow();
     return;
   }
-  for (let id2 of savedTiles().length ? savedTiles() : ["explorer", "editor"]) openTile(id2);
+  for (let id2 of savedTiles().length ? savedTiles() : ["explorer"]) openTile(id2);
   let tabs = $tabs.get(), want = $active.get() ?? tabs[0]?.path;
   want && !meta.has(pathKey(want)) && activate(want);
 }
@@ -852,6 +863,7 @@ function saveLayout() {
 }
 async function restoreLayout() {
   let tiles = savedTiles();
+  $tabs.get().length || (tiles = tiles.filter((id2) => id2 !== "editor"));
   for (let step of dockPlan(savedLayout(), tiles))
     openTile(step.id, step.dock), await frames(2);
 }
@@ -890,7 +902,7 @@ function maximizeOnce() {
   !sessionStorage.getItem("hermes-ide:sized") && window.outerWidth < screen.availWidth * 0.85 && (sessionStorage.setItem("hermes-ide:sized", "1"), window.hermesDesktop?.windowControls?.toggleMaximize?.());
 }
 async function setupIdeWindow() {
-  markIdeChat(windowSessionId()), maximizeOnce(), fullWindowSetup(), await restoreLayout();
+  markIdeChat(windowSessionId()), maximizeOnce(), fullWindowSetup(), await maximized(), await sizeSettled(), await hideSessionList(), await restoreLayout();
   let want = $active.get() ?? $tabs.get()[0]?.path;
   want && !meta.has(pathKey(want)) && closers.has("editor") && activate(want);
   let pending = sessionStorage.getItem(PENDING_OPEN);
@@ -902,7 +914,7 @@ async function setupIdeWindow() {
     } catch {
     }
   }
-  await maximized(), await sizeSettled(), await hideSessionList(), await frames(2), await fitColumns(), layoutState.ready = !0, saveLayout();
+  await frames(2), await fitColumns(), layoutState.ready = !0, saveLayout();
 }
 function runCommand(id2) {
   let active = $active.get();
@@ -1056,56 +1068,138 @@ function track(s) {
 function initBrowser() {
   $trusted.set(trusted()), ctx.onDispose($root.subscribe(() => void detectProject())), ctx.onDispose($runUiRequest.subscribe((n) => n && void (selected() ? startUi() : detectProject(!0)))), ctx.onDispose(() => clearInterval(poll));
 }
-var PICKER = `(() => new Promise(resolve => {
+var PICKER = String.raw`(() => new Promise(resolve => {
+  if (typeof window.__hermesIdePick === 'function') window.__hermesIdePick(null)
   const box = document.createElement('div')
   const tag = document.createElement('div')
-  box.style.cssText = 'position:fixed;pointer-events:none;z-index:2147483647;border:2px solid #3b82f6;background:rgba(59,130,246,.12);border-radius:3px'
-  tag.style.cssText = 'position:fixed;pointer-events:none;z-index:2147483647;font:11px/1.6 ui-monospace,monospace;color:#fff;background:#1d4ed8;padding:0 6px;border-radius:3px;white-space:nowrap'
+  box.style.cssText = 'position:fixed;pointer-events:none;z-index:2147483647;border:2px solid #3b82f6;background:rgba(59,130,246,.12);border-radius:3px;display:none'
+  tag.style.cssText = 'position:fixed;pointer-events:none;z-index:2147483647;font:11px/1.6 ui-monospace,monospace;color:#fff;background:#1d4ed8;padding:0 6px;border-radius:3px;white-space:nowrap;display:none'
   document.documentElement.append(box, tag)
   let cur = null
   const esc = s => (window.CSS && CSS.escape ? CSS.escape(s) : s)
+  const unique = s => { try { return document.querySelectorAll(s).length === 1 } catch (e) { return false } }
+  const TEST_ATTRS = ['data-testid', 'data-test', 'data-cy', 'data-qa']
+  const byAttr = el => {
+    for (const a of TEST_ATTRS) {
+      const v = el.getAttribute && el.getAttribute(a)
+      if (v) { const s = '[' + a + '="' + v.replace(/"/g, '\\"') + '"]'; if (unique(s)) return s }
+    }
+    return null
+  }
+  // The shortest selector that matches only this element: a test id, a unique id, else a tag and
+  // class path that grows until it is unique.
   const sel = el => {
+    const own = byAttr(el) || (el.id && unique('#' + esc(el.id)) ? '#' + esc(el.id) : null)
+    if (own) return own
     const parts = []
-    for (let n = el; n && n.nodeType === 1 && parts.length < 5; n = n.parentElement) {
-      if (n.id && document.querySelectorAll('#' + esc(n.id)).length === 1) { parts.unshift('#' + esc(n.id)); break }
+    for (let n = el; n && n.nodeType === 1 && parts.length < 7; n = n.parentElement) {
+      if (n !== el) {
+        const anchor = byAttr(n) || (n.id && unique('#' + esc(n.id)) ? '#' + esc(n.id) : null)
+        if (anchor) { parts.unshift(anchor); break }
+      }
       let p = n.tagName.toLowerCase()
-      const cls = [...n.classList].filter(c => !/^(hover|focus|active):/.test(c)).slice(0, 2)
+      const cls = [...n.classList].filter(c => !/[\[\]:\/()]/.test(c)).slice(0, 2)
       if (cls.length) p += '.' + cls.map(esc).join('.')
       const sib = n.parentElement ? [...n.parentElement.children].filter(c => c.tagName === n.tagName) : []
       if (sib.length > 1) p += ':nth-of-type(' + (sib.indexOf(n) + 1) + ')'
       parts.unshift(p)
-      if (n === document.body) break
+      if (n === document.body || unique(parts.join(' > '))) break
     }
     return parts.join(' > ')
   }
-  const move = e => {
-    const el = document.elementFromPoint(e.clientX, e.clientY)
-    if (!el || el === box || el === tag) return
-    cur = el
-    const r = el.getBoundingClientRect()
-    Object.assign(box.style, { left: r.left + 'px', top: r.top + 'px', width: r.width + 'px', height: r.height + 'px' })
-    tag.textContent = el.tagName.toLowerCase() + (el.id ? '#' + el.id : '') + (el.classList.length ? '.' + [...el.classList].slice(0, 2).join('.') : '') + '  ' + Math.round(r.width) + '\xD7' + Math.round(r.height)
-    Object.assign(tag.style, { left: Math.max(2, r.left) + 'px', top: (r.top > 22 ? r.top - 20 : r.bottom + 2) + 'px' })
+  // The deepest element under the pointer, through open shadow roots.
+  const hit = (x, y) => {
+    let el = document.elementFromPoint(x, y)
+    while (el && el.shadowRoot) { const inner = el.shadowRoot.elementFromPoint(x, y); if (!inner || inner === el) break; el = inner }
+    return el
   }
-  const stop = e => { e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation() }
-  const done = v => {
-    for (const [t, f] of handlers) removeEventListener(t, f, true)
-    box.remove(); tag.remove(); resolve(v)
-  }
-  const click = e => {
-    stop(e)
-    if (!cur) return done(null)
-    const cs = getComputedStyle(cur)
+  const paint = () => {
+    if (!cur || !cur.isConnected) { box.style.display = tag.style.display = 'none'; return }
     const r = cur.getBoundingClientRect()
+    Object.assign(box.style, { display: 'block', left: r.left + 'px', top: r.top + 'px', width: r.width + 'px', height: r.height + 'px' })
+    tag.textContent = cur.tagName.toLowerCase() + (cur.id ? '#' + cur.id : '') + (cur.classList.length ? '.' + [...cur.classList].slice(0, 2).join('.') : '') + '  ' + Math.round(r.width) + '×' + Math.round(r.height)
+    Object.assign(tag.style, { display: 'block', left: Math.max(2, r.left) + 'px', top: (r.top > 22 ? r.top - 20 : r.bottom + 2) + 'px' })
+  }
+  // The UI component that renders the element, in a framework's development build: React (fiber,
+  // _debugSource up to React 18), Vue 3 and 2 (__file), Svelte (__svelte_meta). Absent in
+  // production builds, where the IDE falls back to searching the project.
+  const component = el => {
+    for (let n = el, hops = 0; n && hops < 12; n = n.parentElement, hops++) {
+      const fk = Object.keys(n).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'))
+      if (fk) {
+        const names = []
+        // The element's own fiber carries the JSX line that rendered it: the most exact source.
+        const own = n[fk] && n[fk]._debugSource
+        let file = own ? own.fileName || '' : '', line = own ? own.lineNumber || 0 : 0
+        for (let f = n[fk]; f && names.length < 3; f = f.return) {
+          const t = f.type
+          if (!t || typeof t === 'string') continue
+          const name = t.displayName || t.name || (t.render && (t.render.displayName || t.render.name)) || (t.type && (t.type.displayName || t.type.name)) || ''
+          if (!name || /^(Anonymous|Fragment|Suspense)$/.test(name)) continue
+          names.push(name)
+          if (!file && f._debugSource) { file = f._debugSource.fileName || ''; line = f._debugSource.lineNumber || 0 }
+        }
+        if (names.length) return { framework: 'React', names, file, line }
+      }
+      if (n.__vueParentComponent) {
+        const names = []
+        let file = ''
+        for (let c = n.__vueParentComponent; c && names.length < 3; c = c.parent) {
+          const t = c.type || {}
+          const name = t.name || t.__name || (t.__file ? t.__file.split('/').pop().replace(/\.vue$/, '') : '')
+          if (name) names.push(name)
+          if (!file && t.__file) file = t.__file
+        }
+        if (names.length) return { framework: 'Vue', names, file, line: 0 }
+      }
+      if (n.__vue__ && n.__vue__.$options) {
+        const o = n.__vue__.$options
+        return { framework: 'Vue', names: [o.name || o._componentTag || 'component'], file: o.__file || '', line: 0 }
+      }
+      if (n.__svelte_meta && n.__svelte_meta.loc) {
+        const loc = n.__svelte_meta.loc
+        return { framework: 'Svelte', names: [loc.file.split('/').pop().replace(/\.svelte$/, '')], file: loc.file, line: (loc.line || 0) + 1 }
+      }
+    }
+    return null
+  }
+  const ATTRS = ['role', 'aria-label', 'href', 'src', 'alt', 'name', 'type', 'placeholder', 'title', 'for', 'value']
+  const describe = el => {
+    const cs = getComputedStyle(el)
+    const r = el.getBoundingClientRect()
     const pick = ['display', 'position', 'color', 'background-color', 'font-family', 'font-size', 'font-weight', 'line-height', 'padding', 'margin', 'border', 'border-radius', 'gap', 'width', 'height']
     const styles = {}
     for (const k of pick) { const v = cs.getPropertyValue(k); if (v && v !== 'none' && v !== 'normal' && v !== '0px' && v !== 'rgba(0, 0, 0, 0)') styles[k] = v }
-    done({ selector: sel(cur), tag: cur.tagName.toLowerCase(), id: cur.id || '', classes: [...cur.classList], text: (cur.innerText || cur.textContent || '').trim().replace(/\\s+/g, ' ').slice(0, 160), html: cur.outerHTML.slice(0, 1200), rect: { w: Math.round(r.width), h: Math.round(r.height) }, styles, url: location.href })
+    const attrs = {}
+    for (const a of ATTRS) { const v = el.getAttribute(a); if (v) attrs[a] = v.slice(0, 120) }
+    const outer = el.outerHTML.replace(/\s+/g, ' ')
+    const open = outer.slice(0, outer.indexOf('>') + 1)
+    const html = outer.length <= 600 ? outer : open.slice(0, 400) + ' … </' + el.tagName.toLowerCase() + '>'
+    // Inside a shadow root, name the host too (Playwright's >>> piercing form).
+    const rootNode = el.getRootNode && el.getRootNode()
+    const selector = rootNode && rootNode.host ? sel(rootNode.host) + ' >>> ' + sel(el) : sel(el)
+    return { selector, tag: el.tagName.toLowerCase(), id: el.id || '', classes: [...el.classList], text: (el.innerText || el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 160), html, rect: { w: Math.round(r.width), h: Math.round(r.height) }, styles, attrs, component: component(el), url: location.href }
   }
+  const stop = e => { e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation() }
+  const move = e => { const el = hit(e.clientX, e.clientY); if (!el || el === box || el === tag) return; cur = el; paint() }
+  const click = e => { stop(e); if (!cur) { const el = hit(e.clientX, e.clientY); if (el && el !== box && el !== tag) cur = el } if (!cur) return done(null); let info = null; try { info = describe(cur) } catch (err) { info = null } done(info) }
   const key = e => { if (e.key === 'Escape') { stop(e); done(null) } }
-  const handlers = [['mousemove', move], ['click', click], ['keydown', key], ['mousedown', stop], ['pointerdown', stop], ['mouseup', stop]]
+  const cancel = e => { stop(e); done(null) }
+  const handlers = [['mousemove', move], ['click', click], ['keydown', key], ['contextmenu', cancel], ['mousedown', stop], ['pointerdown', stop], ['mouseup', stop], ['pointerup', stop], ['auxclick', stop], ['dblclick', stop]]
+  function done(v) {
+    if (window.__hermesIdePick !== done) return
+    window.__hermesIdePick = null
+    for (const [t, f] of handlers) removeEventListener(t, f, true)
+    removeEventListener('scroll', paint, true)
+    removeEventListener('resize', paint)
+    box.remove(); tag.remove()
+    resolve(v)
+  }
+  window.__hermesIdePick = done
   for (const [t, f] of handlers) addEventListener(t, f, true)
-}))()`, $picking = atom2(!1), CANCEL_PICK = "dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })); true", cancelPick = null;
+  addEventListener('scroll', paint, true)
+  addEventListener('resize', paint)
+}))()`, $picking = atom2(!1), CANCEL_PICK = "typeof window.__hermesIdePick === 'function' ? (window.__hermesIdePick(null), true) : false", cancelPick = null;
 async function pickElement(webview) {
   if ($picking.get()) {
     cancelPick?.();
@@ -1119,10 +1213,10 @@ async function pickElement(webview) {
       notify("info", "Open the page in the Browser pane first (the link in the Project UI column), then pick.", "Hermes IDE");
       return;
     }
-    run = (code) => ctx.preview.executeJavaScript(code), notify("info", "Click an element in the Browser pane (Esc cancels).", "Hermes IDE");
+    run = (code) => ctx.preview.executeJavaScript(code);
   }
   if (!run) return;
-  $picking.set(!0);
+  notify("info", "Click an element in the page. Esc, a right-click or the pick button again cancels.", "Hermes IDE"), $picking.set(!0);
   let go2 = run, stopped = new Promise((resolve) => {
     let timer = setTimeout(() => resolve(null), 12e4);
     cancelPick = () => {
@@ -1142,11 +1236,20 @@ async function pickElement(webview) {
 async function likelySources(p) {
   let root = selected()?.dir || $root.get();
   if (!root) return [];
+  let c2 = p.component;
+  if (c2?.file) {
+    let raw = c2.file.replace(/\\/g, "/").replace(/^webpack:\/\/[^/]*\//, "").replace(/^\/@fs\//, "/").replace(/\?.*$/, ""), path = /^([a-zA-Z]:)?\//.test(raw) ? raw : `${root.replace(/\/$/, "")}/${raw.replace(/^\.?\//, "")}`;
+    try {
+      let st = await call("/fs/stat", { path });
+      if (st.exists && !st.dir) return [fileRef(st.path, chatRoot2(), c2.line || void 0)];
+    } catch {
+    }
+  }
   let queries = [
     p.id && p.id.length > 2 ? p.id : "",
     p.text && p.text.length >= 4 && p.text.length <= 80 && !p.text.includes(`
 `) ? p.text : "",
-    [...p.classes].filter((c2) => c2.length >= 5 && !/[:[\]/]/.test(c2)).sort((a2, b) => b.length - a2.length)[0] || ""
+    [...p.classes].filter((c3) => c3.length >= 5 && !/[:[\]/]/.test(c3)).sort((a2, b) => b.length - a2.length)[0] || ""
   ].filter(Boolean);
   for (let query of queries)
     try {
@@ -1160,17 +1263,42 @@ function chatRoot2() {
   let root = $root.get(), cwd = host2.state.cwd.get();
   return root && cwd && pathKey(root) === pathKey(cwd) ? root : null;
 }
-async function sendPicked(p) {
-  let sources = await likelySources(p), styles = Object.entries(p.styles).map(([k, v]) => `${k}: ${v}`).join("; "), text = [
-    `Element picked in the IDE browser (${p.url}):`,
-    `- selector: \`${p.selector}\` (<${p.tag}> ${p.rect.w}\xD7${p.rect.h})${p.text ? `, text "${p.text}"` : ""}`,
-    `- html: \`${p.html.replace(/`/g, "'").replace(/\s+/g, " ")}\``,
+var PICKS_KEY = "hermes-ide:picks";
+function storedPicks() {
+  try {
+    let v = JSON.parse(sessionStorage.getItem(PICKS_KEY) || "null");
+    if (v && typeof v.next == "number" && v.blocks && typeof v.blocks == "object") return v;
+  } catch {
+  }
+  return { next: 1, blocks: {} };
+}
+function storePick(block) {
+  let s = storedPicks(), id2 = s.next;
+  s.blocks[String(id2)] = block;
+  let ids = Object.keys(s.blocks).map(Number).sort((a2, b) => a2 - b);
+  for (let old of ids.slice(0, Math.max(0, ids.length - 50))) delete s.blocks[String(old)];
+  return sessionStorage.setItem(PICKS_KEY, JSON.stringify({ next: id2 + 1, blocks: s.blocks })), id2;
+}
+function expandPicks(text) {
+  return text.includes("[[ element ") ? expandPickTokens(text, storedPicks().blocks) : text;
+}
+function pickBlock(p, sources) {
+  let where = "the IDE browser", styles = Object.entries(p.styles).map(([k, v]) => `${k}: ${v}`).join("; "), attrs = Object.entries(p.attrs || {}).map(([k, v]) => `${k}="${v.replace(/"/g, "'")}"`).join(" "), c2 = p.component;
+  return [
+    `[[ Element picked in ${where} (${p.url}):`,
+    `- selector: \`${p.selector}\` (<${p.tag}> ${p.rect.w}\xD7${p.rect.h})${p.text ? `, text "${p.text.replace(/"/g, "'")}"` : ""}`,
+    c2 ? `- component: ${[...c2.names].reverse().join(" \u203A ")} (${c2.framework})` : "",
+    attrs ? `- attributes: ${attrs}` : "",
+    `- html: \`${p.html.replace(/`/g, "'")}\``,
     styles ? `- styles: ${styles}` : "",
-    sources.length ? `- likely source: ${sources.join(" ")}` : ""
+    sources.length ? `- ${c2?.file && sources.length === 1 ? "source" : "likely source"}: ${sources.join(" ")}` : "",
+    "]]"
   ].filter(Boolean).join(`
-`), sid = host2.state.focusedSessionId.get() || null;
-  await host2.composer.insertText(sid, text + `
-`, { mode: "block" }) ? (host2.composer.focus(sid), notify("info", `Added <${p.tag}> to the chat${sources.length ? ` with ${sources.length} likely source line${sources.length > 1 ? "s" : ""}` : ""}.`, "Hermes IDE")) : (await ctx.os.writeClipboard(text), notify("info", "No chat composer is ready, so the element was copied to the clipboard.", "Hermes IDE"));
+`);
+}
+async function sendPicked(p) {
+  let sources = await likelySources(p), block = pickBlock(p, sources), id2 = storePick(block), clean = (s) => s.replace(/[[\]@`]/g, ""), label = clean(`<${p.tag}${p.id ? "#" + p.id : p.classes[0] ? "." + p.classes[0] : ""}>`), preview = clean(p.text), text = preview ? ` "${preview.length > 24 ? preview.slice(0, 23) + "\u2026" : preview}"` : "", token = `[[ element ${id2} \xB7 ${label}${text} ]]`, sid = host2.state.focusedSessionId.get() || null;
+  await host2.composer.insertText(sid, token + " ", { mode: "inline" }) ? (host2.composer.focus(sid), notify("info", `Added ${label} to the chat; its full description is sent with your message${sources.length ? `, with ${sources.length} source line${sources.length > 1 ? "s" : ""}` : ""}.`, "Hermes IDE")) : (await ctx.os.writeClipboard(block), notify("info", "No chat composer is ready, so the element was copied to the clipboard.", "Hermes IDE"));
 }
 function servedUrl(path) {
   let s = $server.get(), c2 = $candidates.get().find((x) => x.id === s?.id);
@@ -30288,7 +30416,7 @@ function FullBrowserTile() {
           }
         }
       ),
-      /* @__PURE__ */ jsx2("button", { className: "hi-btn", "data-on": picking, title: "Pick an element and send it to the chat", disabled: !url, onClick: () => void pickElement(guest()), children: icon("inspect") }),
+      /* @__PURE__ */ jsx2("button", { className: "hi-btn", "data-on": picking, "aria-pressed": picking, title: picking ? "Cancel the pick" : "Pick an element and send it to the chat", disabled: !url && !picking, onClick: () => void pickElement(guest()), children: icon("inspect") }),
       /* @__PURE__ */ jsx2("button", { className: "hi-btn", title: "Page DevTools", disabled: !url, onClick: () => guest()?.openDevTools(), children: icon("debug-console") }),
       /* @__PURE__ */ jsx2("button", { className: "hi-btn", title: "Open in your browser", disabled: !url, onClick: () => void ctx.os.openExternal?.(url), children: icon("link-external") })
     ] }),
@@ -31407,7 +31535,19 @@ var PLUGIN_ID = "hermes-ide", plugin_default = {
     ctx2.onEvent(`plugin.${PLUGIN_ID}.open`, (ev) => {
       let p = ev?.payload ?? {}, mine = [sid, host5.state.focusedStoredSessionId.get(), host5.state.focusedSessionId.get()];
       p.session_id && !mine.includes(p.session_id) || (typeof p.path == "string" && p.path && openFile(p.path, { line: Number(p.line) > 0 ? Number(p.line) : void 0 }), typeof p.url == "string" && p.url && openInBrowser(p.url));
-    }), ctx2.onEvent("tool.complete", onToolComplete), ctx2.onEvent("message.complete", () => void applyPendingCwd()), ctx2.addEventListener(window, "focus", () => scheduleRefresh()), ctx2.addEventListener(window, "pagehide", saveLayout), ctx2.onDispose(host5.state.focusedStoredSessionId.subscribe((id2) => void switchSession(id2 || sid))), ctx2.onDispose(host5.state.cwd.subscribe(() => void syncRoot())), ctx2.onDispose(disposeTiles), initBrowser(), watchLayout(), setupIdeWindow();
+    }), ctx2.register({
+      id: "picked-elements",
+      area: sdk.COMPOSER_AREAS?.middleware ?? "composer.middleware",
+      data: { handler: (draft) => ({ ...draft, text: expandPicks(draft.text) }) }
+    });
+    let beat = () => {
+      let ids = [sid, host5.state.focusedStoredSessionId.get(), host5.state.focusedSessionId.get()].filter(Boolean);
+      call("/ide/session", { ids }).catch(() => {
+      });
+    };
+    beat();
+    let beatTimer = window.setInterval(beat, 6e4);
+    ctx2.onDispose(() => clearInterval(beatTimer)), ctx2.onDispose(host5.state.focusedStoredSessionId.listen(() => beat())), ctx2.onEvent("tool.complete", onToolComplete), ctx2.onEvent("message.complete", () => void applyPendingCwd()), ctx2.addEventListener(window, "focus", () => scheduleRefresh()), ctx2.addEventListener(window, "pagehide", saveLayout), ctx2.onDispose(host5.state.focusedStoredSessionId.subscribe((id2) => void switchSession(id2 || sid))), ctx2.onDispose(host5.state.cwd.subscribe(() => void syncRoot())), ctx2.onDispose(disposeTiles), initBrowser(), watchLayout(), setupIdeWindow();
   }
 };
 export {

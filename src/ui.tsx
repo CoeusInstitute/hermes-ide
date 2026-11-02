@@ -1119,7 +1119,7 @@ function RunPanel() {
       <div className="hi-run-tools">
         <span className="hi-dim">Project UI</span>
         <span className="hi-spacer" />
-        <button className="hi-btn" data-on={picking} title={picking ? 'Cancel the pick' : 'Pick an element in the Browser pane and send it to the chat'} disabled={!canScript} onClick={() => void pickElement()}>{icon('inspect')}</button>
+        <button className="hi-btn" data-on={picking} aria-pressed={picking} title={picking ? 'Cancel the pick' : 'Pick an element in the Browser pane and send it to the chat'} disabled={!canScript} onClick={() => void pickElement()}>{icon('inspect')}</button>
         <button className="hi-btn" title="Reload the page in the Browser pane" disabled={!canScript} onClick={() => void reloadPreview()}>{icon('refresh')}</button>
         <button className="hi-btn" title="Show the Browser pane" onClick={() => ctx.runAction?.('view.showBrowser')}>{icon('globe')}</button>
         <button className="hi-btn" title="Open in your browser" disabled={!url} onClick={() => url && void ctx.os.openExternal?.(url)}>{icon('link-external')}</button>

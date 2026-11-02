@@ -15,7 +15,7 @@
 import * as sdk from '@hermes/plugin-sdk'
 import { host } from '@hermes/plugin-sdk'
 
-import { initBrowser, pickElement, startUi, stopUi } from './browser'
+import { expandPicks, initBrowser, pickElement, startUi, stopUi } from './browser'
 import {
   IDE_WINDOW,
   bindContext,
@@ -45,7 +45,8 @@ import {
   noteTiles,
   $active,
   addToChat,
-  applyPendingCwd
+  applyPendingCwd,
+  call
 } from './core'
 import { watchLayout } from './full/layout'
 import { initSidebar } from './full/sidebar'
@@ -190,6 +191,24 @@ export default {
       if (typeof p.path === 'string' && p.path) void openFile(p.path, { line: Number(p.line) > 0 ? Number(p.line) : undefined })
       if (typeof p.url === 'string' && p.url) openInBrowser(p.url)
     })
+    // Picked elements wait in the composer as one-line tokens; the message carries their full
+    // description.
+    ctx.register({
+      id: 'picked-elements',
+      area: (sdk as any).COMPOSER_AREAS?.middleware ?? 'composer.middleware',
+      data: { handler: (draft: { text: string }) => ({ ...draft, text: expandPicks(draft.text) }) }
+    })
+    // Tell the backend this chat has an IDE window open, so the agent knows its messages come from
+    // the IDE (see skills/guide and the pre_llm_call hook in __init__.py). A lease: renewed while
+    // the window is open, forgotten a few minutes after it closes.
+    const beat = () => {
+      const ids = [sid, host.state.focusedStoredSessionId.get(), host.state.focusedSessionId.get()].filter(Boolean)
+      void call('/ide/session', { ids }).catch(() => undefined)
+    }
+    beat()
+    const beatTimer = window.setInterval(beat, 60_000)
+    ctx.onDispose(() => clearInterval(beatTimer))
+    ctx.onDispose(host.state.focusedStoredSessionId.listen(() => beat()))
     ctx.onEvent('tool.complete', onToolComplete)
     ctx.onEvent('message.complete', () => void applyPendingCwd())
     ctx.addEventListener(window, 'focus', () => scheduleRefresh())

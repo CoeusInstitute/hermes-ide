@@ -147,7 +147,7 @@ export function pathsFromToolArgs(args: unknown): string[] {
 /** Column plan for a window `width` px wide. Proportions follow Cursor's agent layout; clamps keep
  *  each column usable on small and huge screens. The editor takes whatever is left. */
 export function columnPlan(width: number) {
-  const explorer = Math.round(Math.min(340, Math.max(220, width * 0.14)))
+  const explorer = Math.round(Math.min(300, Math.max(220, width * 0.14)))
   const chat = Math.round(Math.min(760, Math.max(380, width * 0.3)))
   const preview = Math.round(Math.min(1280, Math.max(520, width * 0.32)))
   return { explorer, chat, preview }
@@ -218,12 +218,29 @@ export function columnWidths(columns: Array<ColumnId | null>, width: number, sav
   const plan = columnPlan(width)
   const shares = Math.max(1, columns.filter(id => id === 'browser' || !id).length)
   const planned: Record<ColumnId, number> = { explorer: plan.explorer, chat: plan.chat, browser: Math.round(plan.preview / shares), editor: 0 }
-  const flex = columns.includes('editor') ? 'editor' : columns.includes('chat') ? 'chat' : null
+  // The editor takes the rest. Without it the page does, a little wider than the chat beside it.
+  const flex = columns.includes('editor') ? 'editor' : columns.includes('browser') ? 'browser' : columns.includes('chat') ? 'chat' : null
+  const pagePair = flex === 'browser' && columns.includes('chat')
+  if (pagePair) {
+    // The room the page and the chat share: the window minus every other column, the app's own
+    // panes (null) included, so a docked app Browser pane does not leave the chat wider than the page.
+    const rest = width - columns.reduce((sum, id) => sum + (!id ? planned.browser : id !== 'browser' && id !== 'chat' ? sizeOf(id) : 0), 0)
+    planned.chat = Math.round(rest * 0.47)
+  }
+  function sizeOf(id: ColumnId): number {
+    const f = saved[id]
+    // A saved width outside sane bounds (an Explorer recorded at a quarter of the window, before
+    // the columns were ever fitted) is not the user's choice: use the plan.
+    const px = typeof f === 'number' && f > 0.04 && f < 0.9 ? Math.round(f * width) : null
+    if (px === null || (id === 'explorer' && (px < 180 || px > 600))) return planned[id]
+    return px
+  }
   return columns.map(id => {
     if (id && id === flex) return null
     if (!id) return planned.browser
-    const f = saved[id]
-    return typeof f === 'number' && f > 0.04 && f < 0.9 ? Math.round(f * width) : planned[id]
+    // The chat beside a page keeps its share of the room, not a width saved for another layout.
+    if (pagePair && id === 'chat') return planned.chat
+    return sizeOf(id)
   })
 }
 
@@ -247,3 +264,13 @@ export function pathOrUrl(target: string): string {
   return 'file:///' + parts.join('/').replace(/^([a-z])%3A/i, '$1:')
 }
 
+
+// ── picked-element tokens (the composer holds a short token; the message carries the block) ──
+
+export const PICK_TOKEN_RE = /\[\[ element (\d+) · [^\]\n]*\]\]/g
+
+/** `text` with every element token whose block is known replaced by that block, on its own lines. */
+export function expandPickTokens(text: string, blocks: Record<string, string>): string {
+  if (!text.includes('[[ element ')) return text
+  return text.replace(PICK_TOKEN_RE, (token, id: string) => (blocks[id] ? `\n${blocks[id]}\n` : token))
+}

@@ -8,6 +8,24 @@ Wiring legend:
 - **Mirror**: the IDE follows Desktop state (session, folder, theme) and stays in sync with it.
 - **Add**: built by the plugin because Desktop has no equivalent.
 
+## Gate 0.5: the element picker, the IDE's first look, the agent's awareness (shipped in v0.5, verified in a sandboxed Desktop, 2026-11-02)
+
+v0.5 answers the owner's refinements after v0.4. Evidence is from a sandboxed packaged Desktop at 3840 px driven over CDP with real pointer and key input, against a React 18 + Vite demo app (nested components, a shadow root, a long page, text with `[` `]` and `@`), on both builds.
+
+| Feature | Wiring | Verified |
+|---|---|---|
+| The IDE opens with a narrow Explorer and no Editor | `savedTiles()` default `['explorer']`; `restoreLayout` drops `editor` when the chat has no tabs (full build); the window maximizes and hides the session list before tiles dock; `columnPlan` caps the Explorer at 300 | Columns sampled from 2 s after opening: `explorer:300`, `chat:3540`, no editor tile, unchanged at 4, 7 and 12 s |
+| A saved Explorer width from before any fit is ignored | `fittedOnce` gates width capture; `columnWidths` ignores an Explorer outside 180 to 600 px | Unit tests: a saved 0.25 share gives the 300 px plan, a saved 0.09 share is kept |
+| The page is a little wider than the chat | With no editor, `columnWidths` makes the Browser the flex column and gives the chat 47% of the room left | After opening the Vite project: `explorer:300`, `browser:1876`, `chat:1664`; unit test |
+| The pick button toggles a pick off | `pickElement` cancels a running pick; the page script exposes `window.__hermesIdePick` | Full build: engaged → page handle live, 2 overlay nodes, button pressed; second click → handle gone, 0 overlays, button reset. Same in the catalog build through `ctx.preview`. Esc and a right-click also end it with no token added |
+| Picked elements are one-line tokens in the composer | `insertText` of `[[ element N · <tag#id> "text" ]]` (brackets, `@` and backticks stripped from the preview); blocks in `sessionStorage` | Composer read back `[[ element 2 · <button.cta-button> "Mark all done" ]] [[ element 3 · <h1#title> "Tasks beta home" ]]`; tokens and blocks survived a window reload |
+| Tokens become `[[ … ]]` blocks when sent | `COMPOSER_AREAS.middleware` → `expandPickTokens` (unit-tested) | Full build: the sent message holds 2 blocks with their closing `]]`, 0 tokens left. Catalog build: 3 tokens sent, 3 blocks in the transcript, and the model counted 3 |
+| Component and exact source line | Page script reads React fibers (`_debugSource` of the element's own fiber first), Vue `__file`, Svelte `__svelte_meta`; the IDE checks the file exists | `App › TaskList › DoneButton (React)`, `source: @file:src/DoneButton.jsx:3` (the `<button` line); `<h1>` → `src/App.jsx:6`; the model named both lines |
+| Robust selectors | Test ids, unique ids, shortest unique path; shadow roots as `host >>> inner` | `[data-testid="footer-note"]` picked after scrolling the page; `shadow-card >>> p.inner` through an open shadow root (source found by search: `src/main.jsx:7`) |
+| The agent knows a message comes from the IDE | `/ide/session` lease (renewed every minute) in `plugin-data/hermes-ide/ide-sessions.json`; `pre_llm_call` hook returns the note | Lease file held the chat's id; asked to quote the note, the model answered with its opening words ("This message was sent from the"); unit tests for the lease, its expiry and the picked-element trigger |
+| A bundled skill | `ctx.register_skill("guide", …, description=…)` | Asked without loading anything, the sandbox agent saw `hermes-ide:guide` in its skill index (the first run showed it without a description, which led to passing the frontmatter's description explicitly) |
+| Open Folder with "move the chat's folder" keeps the new folder | `syncRoot` drops the pin only when the session reports the folder | Before the fix the Explorer went straight back to the old folder; after it, the Explorer stayed on `demo` and the project was detected |
+
 ## Gate 0.4: catalog-ready, reviewed, hardened (shipped in v0.4, verified in a sandboxed Desktop, 2026-11-02)
 
 v0.4 splits one source into a catalog build (Desktop plugin SDK only) and a full build (`src/full/`), and fixes what a fresh-eyes review of v0.3 found. Evidence is from a sandboxed packaged Desktop at 3840 px driven over CDP with real pointer and keyboard input, `hermes plugins validate`, and the test suites (JS 13, Python 19).

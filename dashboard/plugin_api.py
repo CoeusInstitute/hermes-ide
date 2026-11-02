@@ -38,7 +38,7 @@ from fastapi import APIRouter, HTTPException
 # blocks the gateway event loop that every Desktop request shares.
 router = APIRouter()
 
-VERSION = "0.4.0"
+VERSION = "0.5.0"
 MAX_READ_BYTES = 5 * 1024 * 1024
 MAX_LIST_ENTRIES = 5000
 MAX_FILES = 50_000
@@ -722,6 +722,44 @@ threading.Thread(target=_reap, daemon=True, name="hermes-ide-reaper").start()
 atexit.register(lambda: [stop_server(k) for k in list(SERVERS)])
 
 
+# ── IDE windows (read by the agent half's pre_llm_call hook) ─────────────────────────────────
+#
+# An open IDE window renews its chat's ids here every minute, so the agent half can tell the model a
+# message comes from the IDE. A lease: an id not renewed for a few minutes is not an IDE chat now.
+
+IDE_SESSIONS_FILE = "ide-sessions.json"
+
+
+def _ide_sessions_path() -> Path:
+    try:
+        from plugins.plugin_storage import plugin_data_dir
+
+        return Path(plugin_data_dir("hermes-ide")) / IDE_SESSIONS_FILE
+    except Exception:
+        home = Path(os.environ.get("HERMES_HOME") or Path.home() / ".hermes")
+        d = home / "plugin-data" / "hermes-ide"
+        d.mkdir(parents=True, exist_ok=True)
+        return d / IDE_SESSIONS_FILE
+
+
+def note_ide_sessions(ids: list[Any]) -> dict[str, Any]:
+    f = _ide_sessions_path()
+    now = time.time()
+    try:
+        data = json.loads(f.read_text(encoding="utf-8"))
+        data = data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        data = {}
+    data = {k: v for k, v in data.items() if isinstance(v, (int, float)) and now - v < 86400}
+    for i in ids[:8]:
+        if isinstance(i, str) and 0 < len(i) <= 200:
+            data[i] = now
+    tmp = f.with_name(f.name + ".tmp")
+    tmp.write_text(json.dumps(data), encoding="utf-8")
+    os.replace(tmp, f)
+    return {"ok": True}
+
+
 # ── routes ──────────────────────────────────────────────────────────────────────────────────
 
 
@@ -773,6 +811,15 @@ def route_devserver_stop(body: dict) -> dict:
     if not isinstance(key, str) or key not in SERVERS:
         return {"ok": True}
     return stop_server(key)
+
+
+@router.post("/ide/session")
+def route_ide_session(body: dict) -> dict:
+    ids = _body(body).get("ids")
+    if not isinstance(ids, list):
+        raise HTTPException(400, "ids required")
+    with _os_errors():
+        return note_ide_sessions(ids)
 
 
 @router.post("/health")

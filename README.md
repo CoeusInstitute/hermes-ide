@@ -54,7 +54,7 @@ The full build exists because the SDK has no hook yet for a session-list group, 
 
 In a chat, press **Ctrl+Alt+I**, click **IDE** in the status bar, or run **IDE: Open in IDE Window** from the command palette. The IDE opens the chat on screen; from a page such as Capabilities it asks you to open a chat first. The chat needs one message first, because a draft has no session yet. If the chat already has a plain pop-out window, that window turns into the IDE.
 
-The IDE window maximizes, hides the session list (it holds one chat), and opens its columns beside the chat.
+The IDE window maximizes, hides the session list (it holds one chat), and opens its columns beside the chat: the Explorer first (300 px at most), the Editor with the first file you open. With the project's page open and no editor, the page gets a little more room than the chat (about 53 to 47).
 
 ### Columns
 
@@ -100,7 +100,24 @@ When the IDE opens a folder, it looks for a web UI: a `package.json` whose dev s
 
 **Full build.** The page shows in the IDE's own Browser column, with an address bar, back, forward, reload, DevTools and **Open externally**.
 
-**Pick an element** with the inspect button (or **IDE: Pick Element in Browser**): hover the page, click an element, and the chat composer gets its selector, size, text, markup, key styles and up to three likely source lines (`@file:` references found by searching the project for its id, text or most specific class). Press Esc, or the button again, to cancel. In the catalog build the app asks once per site before the IDE may run its picker there (**Allow on this site**); grants are listed on the plugin's row in **Capabilities → Plugins**.
+**Pick an element** with the inspect button (or **IDE: Pick Element in Browser**): hover the page, click an element, and the composer gets one short token for it, such as `[[ element 3 · <button.cta-button> "Mark all done" ]]`. Pick as many as you like and write around them. When you send, each token becomes the element's full description, between `[[` and `]]` so the model sees where each element starts and ends:
+
+```
+[[ Element picked in the IDE browser (http://localhost:5173/):
+- selector: `button.cta-button` (<button> 108×31), text "Mark all done"
+- component: App › TaskList › DoneButton (React)
+- attributes: type="button"
+- html: `<button class="cta-button" type="button">Mark all done</button>`
+- styles: display: inline-block; color: rgb(255, 255, 255); background-color: rgb(99, 102, 241); ...
+- source: @file:src/DoneButton.jsx:3
+]]
+```
+
+- **Source.** In a development build of a React (up to 18), Vue or Svelte app, the IDE reads the component chain and the exact source line that rendered the element. Otherwise it searches the project for the element's id, text or most specific class and lists up to three likely source lines.
+- **Selector.** A test id (`data-testid`, `data-test`, `data-cy`, `data-qa`) or a unique id when there is one, else the shortest tag and class path that matches only that element. Elements inside an open shadow root get the host's selector, then `>>>`.
+- **Cancel** with Esc, a right-click, or the pick button again. The highlight follows scrolling.
+- The page address is a plain link, not an `@url:` reference: Hermes would fetch the whole page into every message, and refuses `localhost` pages anyway.
+- In the catalog build the app asks once per site before the IDE may run its picker there (**Allow on this site**); grants are listed on the plugin's row in **Capabilities → Plugins**.
 
 ### IDE chats
 
@@ -110,7 +127,12 @@ The full build also lists IDE chats in their own **IDE** group under SESSIONS (i
 
 ### The agent drives the IDE
 
-`ide_open` with a `path` (and optional `line`) opens the file in that chat's IDE window, opening the window when needed. With a `url` it offers the page in the project UI view (the full build shows it in its Browser column). For a page in the app's Browser pane, the agent's built-in `open_preview` tool does it directly.
+`ide_open` with a `path` (and optional `line`) opens the file in that chat's IDE window, opening the window when needed. With a `url` it offers the page in the project UI view (the full build shows it in its Browser column). For a page in the app's Browser pane, the agent's built-in `desktop_preview` tool (action `open`) does it directly.
+
+### Your agent knows about the IDE
+
+- While a chat's IDE window is open, each turn in that chat carries a short **[Hermes IDE]** note: the message comes from the IDE, what the user sees beside the chat, what a `[[ Element picked … ]]` block is, and which tools put things in front of them. The note is added to that turn only. It is not stored in the transcript and does not change the system prompt, so the prompt cache is untouched. A message that carries a picked element gets the note even after the window closes.
+- The plugin bundles a skill, **`hermes-ide:guide`**, listed in the agent's skill index while the plugin is enabled: how the IDE works, how to answer an element pick (find the source, change it rather than built output), and what the user sees after an edit.
 
 ## Security and privacy
 
@@ -120,13 +142,15 @@ What the plugin does on your machines, so you can decide before installing:
 - **No data loss.** Deletes go to the system trash or are refused (on Windows the system asks before deleting anything it cannot recycle). Create and rename never overwrite. A save is refused when the file changed on disk since it was loaded, or was deleted.
 - **Shell commands.** `git status` and `git show` (read-only, with optional locks off so they never block the agent's commits), `rg` for search, and, only for projects you trust, the project's own package manager (`install`, then its dev script).
 - **Background processes.** Dev servers you start, in their own process group, stopped two minutes after the last IDE window that asked about them closes, and when the gateway exits. They run with the gateway's environment minus anything that looks like a credential (`*KEY*`, `*TOKEN*`, `*SECRET*`, `*PASSWORD*`, Hermes' own variables), with `BROWSER=none`. A static site is served on `127.0.0.1` by the plugin's own server, which never serves dotfiles or folder listings and answers only a `localhost` Host header.
-- **Page scripts.** The element picker and page reload run a script in the page you opened: in the catalog build only in the app's Browser and only on sites you allowed through the app's own prompt; in the full build in the IDE's own Browser column. The picked element's text and markup go to your chat composer, nowhere else.
+- **Page scripts.** The element picker and page reload run a script in the page you opened: in the catalog build only in the app's Browser and only on sites you allowed through the app's own prompt; in the full build in the IDE's own Browser column. The picked element's description waits in that window's session storage until you send it, and goes nowhere but your chat.
+- **Agent context.** The `pre_llm_call` hook adds the [Hermes IDE] note above to turns of chats whose IDE window is open. To know which chats those are, an open IDE window writes its chat's ids and a timestamp to `plugin-data/hermes-ide/ide-sessions.json` in your Hermes home every minute; nothing else is stored there.
 - **Network.** None to third parties. The plugin talks only to your Hermes gateway and to the dev servers it starts on your machine.
 - **Credentials, telemetry.** The plugin stores no credentials and sends no telemetry or usage data.
 - **Desktop surface.** The catalog build stays inside the Desktop plugin SDK, with one exception: a single call to the app's own title-bar maximize (`window.hermesDesktop.windowControls.toggleMaximize`), because the SDK has no window verb and an IDE does not fit the app's 420 px pop-out. The full build also reads the app's pane and session-list markup for the features in the table above.
 
 ## Known limits
 
+- Catalog build: the Explorer is a panel inside the Editor column, so that column is always there (with the shortcut list until a file opens), and the app sizes its own Browser pane.
 - No language server yet: highlighting, folding, brackets and word completion, but no go-to-definition or diagnostics.
 - Python web UIs (Streamlit, Flask, Django, Gradio) are not detected yet. Open their address in the app's Browser.
 - Against a remote Hermes backend, the dev server runs on the remote machine, so its `localhost` page is not reachable from this one.

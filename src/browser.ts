@@ -7,7 +7,7 @@
 import { atom, host } from '@hermes/plugin-sdk'
 
 import { $root, $runAttention, $runUiRequest, $settings, $view, call, ctx, isMissingBackend, notify, openInBrowser, openTile } from './core'
-import { fileRef, isInside, pathKey } from './util'
+import { expandPickTokens, fileRef, isInside, pathKey } from './util'
 
 export interface Candidate {
   id: string
@@ -198,56 +198,140 @@ export function initBrowser() {
 // ── element picker ───────────────────────────────────────────────────────────────────────────
 
 /** Runs inside the page: highlight what the pointer is over, resolve with the clicked element's
- *  description, or null on Escape. Self-contained: it is sent to the page as a string. */
-const PICKER = `(() => new Promise(resolve => {
+ *  description, or null when cancelled (Esc, right-click, the IDE's button again). Self-contained: it
+ *  is sent to the page as a string. One pick at a time: a second one ends the first, and
+ *  `window.__hermesIdePick(null)` (CANCEL_PICK) ends it from outside. */
+const PICKER = String.raw`(() => new Promise(resolve => {
+  if (typeof window.__hermesIdePick === 'function') window.__hermesIdePick(null)
   const box = document.createElement('div')
   const tag = document.createElement('div')
-  box.style.cssText = 'position:fixed;pointer-events:none;z-index:2147483647;border:2px solid #3b82f6;background:rgba(59,130,246,.12);border-radius:3px'
-  tag.style.cssText = 'position:fixed;pointer-events:none;z-index:2147483647;font:11px/1.6 ui-monospace,monospace;color:#fff;background:#1d4ed8;padding:0 6px;border-radius:3px;white-space:nowrap'
+  box.style.cssText = 'position:fixed;pointer-events:none;z-index:2147483647;border:2px solid #3b82f6;background:rgba(59,130,246,.12);border-radius:3px;display:none'
+  tag.style.cssText = 'position:fixed;pointer-events:none;z-index:2147483647;font:11px/1.6 ui-monospace,monospace;color:#fff;background:#1d4ed8;padding:0 6px;border-radius:3px;white-space:nowrap;display:none'
   document.documentElement.append(box, tag)
   let cur = null
   const esc = s => (window.CSS && CSS.escape ? CSS.escape(s) : s)
+  const unique = s => { try { return document.querySelectorAll(s).length === 1 } catch (e) { return false } }
+  const TEST_ATTRS = ['data-testid', 'data-test', 'data-cy', 'data-qa']
+  const byAttr = el => {
+    for (const a of TEST_ATTRS) {
+      const v = el.getAttribute && el.getAttribute(a)
+      if (v) { const s = '[' + a + '="' + v.replace(/"/g, '\\"') + '"]'; if (unique(s)) return s }
+    }
+    return null
+  }
+  // The shortest selector that matches only this element: a test id, a unique id, else a tag and
+  // class path that grows until it is unique.
   const sel = el => {
+    const own = byAttr(el) || (el.id && unique('#' + esc(el.id)) ? '#' + esc(el.id) : null)
+    if (own) return own
     const parts = []
-    for (let n = el; n && n.nodeType === 1 && parts.length < 5; n = n.parentElement) {
-      if (n.id && document.querySelectorAll('#' + esc(n.id)).length === 1) { parts.unshift('#' + esc(n.id)); break }
+    for (let n = el; n && n.nodeType === 1 && parts.length < 7; n = n.parentElement) {
+      if (n !== el) {
+        const anchor = byAttr(n) || (n.id && unique('#' + esc(n.id)) ? '#' + esc(n.id) : null)
+        if (anchor) { parts.unshift(anchor); break }
+      }
       let p = n.tagName.toLowerCase()
-      const cls = [...n.classList].filter(c => !/^(hover|focus|active):/.test(c)).slice(0, 2)
+      const cls = [...n.classList].filter(c => !/[\[\]:\/()]/.test(c)).slice(0, 2)
       if (cls.length) p += '.' + cls.map(esc).join('.')
       const sib = n.parentElement ? [...n.parentElement.children].filter(c => c.tagName === n.tagName) : []
       if (sib.length > 1) p += ':nth-of-type(' + (sib.indexOf(n) + 1) + ')'
       parts.unshift(p)
-      if (n === document.body) break
+      if (n === document.body || unique(parts.join(' > '))) break
     }
     return parts.join(' > ')
   }
-  const move = e => {
-    const el = document.elementFromPoint(e.clientX, e.clientY)
-    if (!el || el === box || el === tag) return
-    cur = el
-    const r = el.getBoundingClientRect()
-    Object.assign(box.style, { left: r.left + 'px', top: r.top + 'px', width: r.width + 'px', height: r.height + 'px' })
-    tag.textContent = el.tagName.toLowerCase() + (el.id ? '#' + el.id : '') + (el.classList.length ? '.' + [...el.classList].slice(0, 2).join('.') : '') + '  ' + Math.round(r.width) + '×' + Math.round(r.height)
-    Object.assign(tag.style, { left: Math.max(2, r.left) + 'px', top: (r.top > 22 ? r.top - 20 : r.bottom + 2) + 'px' })
+  // The deepest element under the pointer, through open shadow roots.
+  const hit = (x, y) => {
+    let el = document.elementFromPoint(x, y)
+    while (el && el.shadowRoot) { const inner = el.shadowRoot.elementFromPoint(x, y); if (!inner || inner === el) break; el = inner }
+    return el
   }
-  const stop = e => { e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation() }
-  const done = v => {
-    for (const [t, f] of handlers) removeEventListener(t, f, true)
-    box.remove(); tag.remove(); resolve(v)
-  }
-  const click = e => {
-    stop(e)
-    if (!cur) return done(null)
-    const cs = getComputedStyle(cur)
+  const paint = () => {
+    if (!cur || !cur.isConnected) { box.style.display = tag.style.display = 'none'; return }
     const r = cur.getBoundingClientRect()
+    Object.assign(box.style, { display: 'block', left: r.left + 'px', top: r.top + 'px', width: r.width + 'px', height: r.height + 'px' })
+    tag.textContent = cur.tagName.toLowerCase() + (cur.id ? '#' + cur.id : '') + (cur.classList.length ? '.' + [...cur.classList].slice(0, 2).join('.') : '') + '  ' + Math.round(r.width) + '×' + Math.round(r.height)
+    Object.assign(tag.style, { display: 'block', left: Math.max(2, r.left) + 'px', top: (r.top > 22 ? r.top - 20 : r.bottom + 2) + 'px' })
+  }
+  // The UI component that renders the element, in a framework's development build: React (fiber,
+  // _debugSource up to React 18), Vue 3 and 2 (__file), Svelte (__svelte_meta). Absent in
+  // production builds, where the IDE falls back to searching the project.
+  const component = el => {
+    for (let n = el, hops = 0; n && hops < 12; n = n.parentElement, hops++) {
+      const fk = Object.keys(n).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'))
+      if (fk) {
+        const names = []
+        // The element's own fiber carries the JSX line that rendered it: the most exact source.
+        const own = n[fk] && n[fk]._debugSource
+        let file = own ? own.fileName || '' : '', line = own ? own.lineNumber || 0 : 0
+        for (let f = n[fk]; f && names.length < 3; f = f.return) {
+          const t = f.type
+          if (!t || typeof t === 'string') continue
+          const name = t.displayName || t.name || (t.render && (t.render.displayName || t.render.name)) || (t.type && (t.type.displayName || t.type.name)) || ''
+          if (!name || /^(Anonymous|Fragment|Suspense)$/.test(name)) continue
+          names.push(name)
+          if (!file && f._debugSource) { file = f._debugSource.fileName || ''; line = f._debugSource.lineNumber || 0 }
+        }
+        if (names.length) return { framework: 'React', names, file, line }
+      }
+      if (n.__vueParentComponent) {
+        const names = []
+        let file = ''
+        for (let c = n.__vueParentComponent; c && names.length < 3; c = c.parent) {
+          const t = c.type || {}
+          const name = t.name || t.__name || (t.__file ? t.__file.split('/').pop().replace(/\.vue$/, '') : '')
+          if (name) names.push(name)
+          if (!file && t.__file) file = t.__file
+        }
+        if (names.length) return { framework: 'Vue', names, file, line: 0 }
+      }
+      if (n.__vue__ && n.__vue__.$options) {
+        const o = n.__vue__.$options
+        return { framework: 'Vue', names: [o.name || o._componentTag || 'component'], file: o.__file || '', line: 0 }
+      }
+      if (n.__svelte_meta && n.__svelte_meta.loc) {
+        const loc = n.__svelte_meta.loc
+        return { framework: 'Svelte', names: [loc.file.split('/').pop().replace(/\.svelte$/, '')], file: loc.file, line: (loc.line || 0) + 1 }
+      }
+    }
+    return null
+  }
+  const ATTRS = ['role', 'aria-label', 'href', 'src', 'alt', 'name', 'type', 'placeholder', 'title', 'for', 'value']
+  const describe = el => {
+    const cs = getComputedStyle(el)
+    const r = el.getBoundingClientRect()
     const pick = ['display', 'position', 'color', 'background-color', 'font-family', 'font-size', 'font-weight', 'line-height', 'padding', 'margin', 'border', 'border-radius', 'gap', 'width', 'height']
     const styles = {}
     for (const k of pick) { const v = cs.getPropertyValue(k); if (v && v !== 'none' && v !== 'normal' && v !== '0px' && v !== 'rgba(0, 0, 0, 0)') styles[k] = v }
-    done({ selector: sel(cur), tag: cur.tagName.toLowerCase(), id: cur.id || '', classes: [...cur.classList], text: (cur.innerText || cur.textContent || '').trim().replace(/\\s+/g, ' ').slice(0, 160), html: cur.outerHTML.slice(0, 1200), rect: { w: Math.round(r.width), h: Math.round(r.height) }, styles, url: location.href })
+    const attrs = {}
+    for (const a of ATTRS) { const v = el.getAttribute(a); if (v) attrs[a] = v.slice(0, 120) }
+    const outer = el.outerHTML.replace(/\s+/g, ' ')
+    const open = outer.slice(0, outer.indexOf('>') + 1)
+    const html = outer.length <= 600 ? outer : open.slice(0, 400) + ' … </' + el.tagName.toLowerCase() + '>'
+    // Inside a shadow root, name the host too (Playwright's >>> piercing form).
+    const rootNode = el.getRootNode && el.getRootNode()
+    const selector = rootNode && rootNode.host ? sel(rootNode.host) + ' >>> ' + sel(el) : sel(el)
+    return { selector, tag: el.tagName.toLowerCase(), id: el.id || '', classes: [...el.classList], text: (el.innerText || el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 160), html, rect: { w: Math.round(r.width), h: Math.round(r.height) }, styles, attrs, component: component(el), url: location.href }
   }
+  const stop = e => { e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation() }
+  const move = e => { const el = hit(e.clientX, e.clientY); if (!el || el === box || el === tag) return; cur = el; paint() }
+  const click = e => { stop(e); if (!cur) { const el = hit(e.clientX, e.clientY); if (el && el !== box && el !== tag) cur = el } if (!cur) return done(null); let info = null; try { info = describe(cur) } catch (err) { info = null } done(info) }
   const key = e => { if (e.key === 'Escape') { stop(e); done(null) } }
-  const handlers = [['mousemove', move], ['click', click], ['keydown', key], ['mousedown', stop], ['pointerdown', stop], ['mouseup', stop]]
+  const cancel = e => { stop(e); done(null) }
+  const handlers = [['mousemove', move], ['click', click], ['keydown', key], ['contextmenu', cancel], ['mousedown', stop], ['pointerdown', stop], ['mouseup', stop], ['pointerup', stop], ['auxclick', stop], ['dblclick', stop]]
+  function done(v) {
+    if (window.__hermesIdePick !== done) return
+    window.__hermesIdePick = null
+    for (const [t, f] of handlers) removeEventListener(t, f, true)
+    removeEventListener('scroll', paint, true)
+    removeEventListener('resize', paint)
+    box.remove(); tag.remove()
+    resolve(v)
+  }
+  window.__hermesIdePick = done
   for (const [t, f] of handlers) addEventListener(t, f, true)
+  addEventListener('scroll', paint, true)
+  addEventListener('resize', paint)
 }))()`
 
 export interface Picked {
@@ -259,18 +343,20 @@ export interface Picked {
   html: string
   rect: { w: number; h: number }
   styles: Record<string, string>
+  attrs?: Record<string, string>
+  component?: { framework: string; names: string[]; file: string; line: number } | null
   url: string
 }
 
 export const $picking = atom(false)
 
-/** Pick an element: in the full build's own column (`webview`), else in the app's Browser pane
- *  through ctx.preview (the app asks the user once per site before any script runs there). */
-// Ends a pick in the page: the picker script listens for Escape.
-const CANCEL_PICK = "dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })); true"
+// Ends a pick in the page through the picker's own handle (no synthetic key event).
+const CANCEL_PICK = "typeof window.__hermesIdePick === 'function' ? (window.__hermesIdePick(null), true) : false"
 let cancelPick: (() => void) | null = null
 
-/** Pick an element (or, while a pick is running, cancel it). */
+/** Pick an element, or cancel the pick that is running. In the full build's own Browser column
+ *  (`webview`), else in the app's Browser pane through ctx.preview (the app asks the user once per
+ *  site before any script runs there). */
 export async function pickElement(webview?: any) {
   if ($picking.get()) {
     cancelPick?.()
@@ -288,9 +374,9 @@ export async function pickElement(webview?: any) {
       return
     }
     run = code => ctx.preview.executeJavaScript(code)
-    notify('info', 'Click an element in the Browser pane (Esc cancels).', 'Hermes IDE')
   }
   if (!run) return
+  notify('info', 'Click an element in the page. Esc, a right-click or the pick button again cancels.', 'Hermes IDE')
   $picking.set(true)
   const go = run
   // A page that navigates mid-pick can leave the script's promise pending: a cancel or two minutes
@@ -333,6 +419,18 @@ export async function reloadPreview() {
 async function likelySources(p: Picked): Promise<string[]> {
   const root = selected()?.dir || $root.get()
   if (!root) return []
+  // A development build names the component's own file: the best source there is.
+  const c = p.component
+  if (c?.file) {
+    const raw = c.file.replace(/\\/g, '/').replace(/^webpack:\/\/[^/]*\//, '').replace(/^\/@fs\//, '/').replace(/\?.*$/, '')
+    const path = /^([a-zA-Z]:)?\//.test(raw) ? raw : `${root.replace(/\/$/, '')}/${raw.replace(/^\.?\//, '')}`
+    try {
+      const st = await call<{ exists: boolean; dir?: boolean; path: string }>('/fs/stat', { path })
+      if (st.exists && !st.dir) return [fileRef(st.path, chatRoot(), c.line || undefined)]
+    } catch {
+      /* not a file on the agent's machine: fall back to searching */
+    }
+  }
   const queries = [
     p.id && p.id.length > 2 ? p.id : '',
     p.text && p.text.length >= 4 && p.text.length <= 80 && !p.text.includes('\n') ? p.text : '',
@@ -356,24 +454,75 @@ function chatRoot(): string | null {
   return root && cwd && pathKey(root) === pathKey(cwd) ? root : null
 }
 
+// Picked elements wait in the composer as a short token and become the full description when the
+// message is sent (COMPOSER_AREAS.middleware), so the input stays one line per element.
+const PICKS_KEY = 'hermes-ide:picks'
+
+function storedPicks(): { next: number; blocks: Record<string, string> } {
+  try {
+    const v = JSON.parse(sessionStorage.getItem(PICKS_KEY) || 'null')
+    if (v && typeof v.next === 'number' && v.blocks && typeof v.blocks === 'object') return v
+  } catch {
+    /* fresh */
+  }
+  return { next: 1, blocks: {} }
+}
+
+function storePick(block: string): number {
+  const s = storedPicks()
+  const id = s.next
+  s.blocks[String(id)] = block
+  // Keep the last 50 (a window's tokens live as long as its drafts).
+  const ids = Object.keys(s.blocks).map(Number).sort((a, b) => a - b)
+  for (const old of ids.slice(0, Math.max(0, ids.length - 50))) delete s.blocks[String(old)]
+  sessionStorage.setItem(PICKS_KEY, JSON.stringify({ next: id + 1, blocks: s.blocks }))
+  return id
+}
+
+/** The draft as it will be sent: every element token replaced by its full description. A token
+ *  this window no longer knows is left as it is. */
+export function expandPicks(text: string): string {
+  return text.includes('[[ element ') ? expandPickTokens(text, storedPicks().blocks) : text
+}
+
+/** The description the model reads, sectioned with [[ ]] so it knows where an element starts and
+ *  ends. The page address is a plain link (an @url: reference would make Hermes fetch the whole
+ *  page on every send, and a dev server's localhost page is refused by its fetcher anyway). */
+export function pickBlock(p: Picked, sources: string[]): string {
+  const where = __CATALOG__ ? "the app's Browser" : 'the IDE browser'
+  const styles = Object.entries(p.styles).map(([k, v]) => `${k}: ${v}`).join('; ')
+  const attrs = Object.entries(p.attrs || {}).map(([k, v]) => `${k}="${v.replace(/"/g, "'")}"`).join(' ')
+  const c = p.component
+  const lines = [
+    `[[ Element picked in ${where} (${p.url}):`,
+    `- selector: \`${p.selector}\` (<${p.tag}> ${p.rect.w}×${p.rect.h})${p.text ? `, text "${p.text.replace(/"/g, "'")}"` : ''}`,
+    c ? `- component: ${[...c.names].reverse().join(' › ')} (${c.framework})` : '',
+    attrs ? `- attributes: ${attrs}` : '',
+    `- html: \`${p.html.replace(/`/g, "'")}\``,
+    styles ? `- styles: ${styles}` : '',
+    sources.length ? `- ${c?.file && sources.length === 1 ? 'source' : 'likely source'}: ${sources.join(' ')}` : '',
+    ']]'
+  ]
+  return lines.filter(Boolean).join('\n')
+}
+
 async function sendPicked(p: Picked) {
   const sources = await likelySources(p)
-  const styles = Object.entries(p.styles).map(([k, v]) => `${k}: ${v}`).join('; ')
-  const text = [
-    `Element picked in the IDE browser (${p.url}):`,
-    `- selector: \`${p.selector}\` (<${p.tag}> ${p.rect.w}×${p.rect.h})${p.text ? `, text "${p.text}"` : ''}`,
-    `- html: \`${p.html.replace(/`/g, "'").replace(/\s+/g, ' ')}\``,
-    styles ? `- styles: ${styles}` : '',
-    sources.length ? `- likely source: ${sources.join(' ')}` : ''
-  ]
-    .filter(Boolean)
-    .join('\n')
+  const block = pickBlock(p, sources)
+  const id = storePick(block)
+  // The token is plain composer text: no brackets (they end it), no @ or backticks (the composer
+  // would turn them into reference chips or code).
+  const clean = (s: string) => s.replace(/[[\]@`]/g, '')
+  const label = clean(`<${p.tag}${p.id ? '#' + p.id : p.classes[0] ? '.' + p.classes[0] : ''}>`)
+  const preview = clean(p.text)
+  const text = preview ? ` "${preview.length > 24 ? preview.slice(0, 23) + '…' : preview}"` : ''
+  const token = `[[ element ${id} · ${label}${text} ]]`
   const sid = host.state.focusedSessionId.get() || null
-  if (await host.composer.insertText(sid, text + '\n', { mode: 'block' })) {
+  if (await host.composer.insertText(sid, token + ' ', { mode: 'inline' })) {
     host.composer.focus(sid)
-    notify('info', `Added <${p.tag}> to the chat${sources.length ? ` with ${sources.length} likely source line${sources.length > 1 ? 's' : ''}` : ''}.`, 'Hermes IDE')
+    notify('info', `Added ${label} to the chat; its full description is sent with your message${sources.length ? `, with ${sources.length} source line${sources.length > 1 ? 's' : ''}` : ''}.`, 'Hermes IDE')
   } else {
-    await ctx.os.writeClipboard(text)
+    await ctx.os.writeClipboard(block)
     notify('info', 'No chat composer is ready, so the element was copied to the clipboard.', 'Hermes IDE')
   }
 }

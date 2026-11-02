@@ -8,14 +8,15 @@ title: Hermes IDE
 description: 'Cursor-style IDE for Hermes Desktop: any chat opens in its own IDE window with an Explorer,
   a tabbed CodeMirror editor, workspace search, git status and Quick Open beside the real session chat.
   Finds the project''s web UI, runs its dev server after you trust it, and opens the page in the app''s
-  Browser, where an element picker sends elements and their likely source lines to the chat. Add to Chat,
+  Browser, where an element picker sends elements, their component and source line to the chat. Add to Chat,
   inline edit and agent-edit review (Keep/Undo) are wired to the session. Desktop plugin SDK only (one
-  disclosed window-maximize bridge call); backend routes on the agent''s machine; one tool, ide_open.'
+  disclosed window-maximize bridge call); backend routes on the agent''s machine; one tool, ide_open; a
+  pre_llm_call note and a bundled skill so the agent knows a message comes from the IDE.'
 maintainer: CoeusInstitute
 tier: community
 category: desktop
 requires_hermes: ">=0.22.5"
-version: "0.4.0"
+version: "0.5.0"
 docs_url: https://github.com/CoeusInstitute/hermes-ide#readme
 screenshots:
   - https://raw.githubusercontent.com/CoeusInstitute/hermes-ide/CATALOG_SHA/docs/images/ide-window.png
@@ -27,6 +28,6 @@ known_issues:
   - "Against a remote Hermes backend, a dev server's localhost page is on the remote machine."
 capabilities:
   provides_tools: [ide_open]
-  provides_hooks: []
+  provides_hooks: [pre_llm_call]
   provides_middleware: []
   requires_env: []
