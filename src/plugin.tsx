@@ -15,7 +15,7 @@
 import * as sdk from '@hermes/plugin-sdk'
 import { host } from '@hermes/plugin-sdk'
 
-import { expandPicks, initBrowser, pickElement, startUi, stopUi } from './browser'
+import { expandPicks, handleOpenRequest, initBrowser, pickElement, startUi, stopUi } from './browser'
 import {
   IDE_WINDOW,
   bindContext,
@@ -25,7 +25,6 @@ import {
   notify,
   onStorageRequest,
   onToolComplete,
-  openFile,
   openIdeWindow,
   openInBrowser,
   resetLayout,
@@ -46,7 +45,8 @@ import {
   $active,
   addToChat,
   applyPendingCwd,
-  call
+  call,
+  takePending
 } from './core'
 import { watchLayout } from './full/layout'
 import { initSidebar } from './full/sidebar'
@@ -54,6 +54,10 @@ import { $sessionRows, initIdeChats, matches } from './ide-chats'
 import { BrowserTile, EditorTile, ExplorerTile, IdeRowBadge, LayoutToggles, OpenCard, SettingsPage, StatusItem, Workbench } from './ui'
 
 const PLUGIN_ID = 'hermes-ide'
+
+// Open IDE windows announce their chat's ids here (renewed every minute), so the main window
+// leaves an agent request to the window that already shows that chat.
+const WINDOWS_KEY = 'ideWindows'
 
 type Command = { id: string; label: string; keys?: string[]; run: () => void; keywords?: string[] }
 
@@ -108,7 +112,10 @@ export default {
 
     // Every pop-out of a chat listens, so asking for the IDE converts an already open plain
     // pop-out of that chat instead of the app just fronting it.
-    ctx.addEventListener(window, 'storage', onStorageRequest as EventListener)
+    ctx.addEventListener(window, 'storage', ((e: StorageEvent) => {
+      const p = onStorageRequest(e)
+      if (p) void handleOpenRequest(p)
+    }) as EventListener)
 
     if (!IDE_WINDOW) {
       ctx.register({
@@ -125,16 +132,23 @@ export default {
           keywords: ['ide', 'editor', 'cursor', 'code', 'popout', 'window']
         }
       ])
-      // The agent's ide_open tool: open the chat it ran in, in that chat's IDE window, at the file
-      // or page. Only the window showing that chat acts, so two windows never both open it.
+      // The agent's ide_open tool: the chat's open IDE window acts on it; otherwise this window
+      // opens that chat's IDE window with the request, which then acts and answers the tool.
       ctx.onEvent(`plugin.${PLUGIN_ID}.open`, (ev: any) => {
         const p = ev?.payload ?? {}
-        const focused = host.state.focusedStoredSessionId.get()
+        if (!p.session_id) return
         // The same chat under another id: compaction continues a chat under a new stored id.
-        const same = (a: string, b: string | null) => !!b && (a === b || $sessionRows.get().some(r => matches(r, a) && matches(r, b)))
-        if ((p.path || p.url) && p.session_id && same(p.session_id, focused)) {
-          void openIdeWindow({ path: p.path || undefined, line: Number(p.line) > 0 ? Number(p.line) : undefined, url: p.url || undefined, sid: p.session_id })
-        }
+        const same = (a: string, b: string) => a === b || $sessionRows.get().some(r => matches(r, a) && matches(r, b))
+        const open = Object.entries((ctx.storage.get(WINDOWS_KEY, {}) as Record<string, number>) || {})
+        if (open.some(([id, at]) => Date.now() - at < 90_000 && same(p.session_id, id))) return
+        void openIdeWindow({
+          sid: p.session_id,
+          path: p.path || undefined,
+          line: Number(p.line) > 0 ? Number(p.line) : undefined,
+          url: p.url || undefined,
+          ui: !!p.ui,
+          req: p.request_id || undefined
+        })
       })
       initIdeChats()
       if (!__CATALOG__) initSidebar()
@@ -188,8 +202,13 @@ export default {
       // This window's one chat, by any of its ids (route, stored after compaction, runtime).
       const mine = [sid, host.state.focusedStoredSessionId.get(), host.state.focusedSessionId.get()]
       if (p.session_id && !mine.includes(p.session_id)) return
-      if (typeof p.path === 'string' && p.path) void openFile(p.path, { line: Number(p.line) > 0 ? Number(p.line) : undefined })
-      if (typeof p.url === 'string' && p.url) openInBrowser(p.url)
+      void handleOpenRequest({
+        path: typeof p.path === 'string' && p.path ? p.path : undefined,
+        line: Number(p.line) > 0 ? Number(p.line) : undefined,
+        url: typeof p.url === 'string' && p.url ? p.url : undefined,
+        ui: !!p.ui,
+        req: p.request_id || undefined
+      })
     })
     // Picked elements wait in the composer as one-line tokens; the message carries their full
     // description.
@@ -201,13 +220,21 @@ export default {
     // Tell the backend this chat has an IDE window open, so the agent knows its messages come from
     // the IDE (see skills/guide and the pre_llm_call hook in __init__.py). A lease: renewed while
     // the window is open, forgotten a few minutes after it closes.
+    const myIds = () => [sid, host.state.focusedStoredSessionId.get(), host.state.focusedSessionId.get()].filter(Boolean) as string[]
+    const announce = (on: boolean) => {
+      const now = Date.now()
+      const all = Object.fromEntries(Object.entries((ctx.storage.get(WINDOWS_KEY, {}) as Record<string, number>) || {}).filter(([, at]) => now - at < 90_000))
+      for (const id of myIds()) on ? (all[id] = now) : delete all[id]
+      ctx.storage.set(WINDOWS_KEY, all)
+    }
     const beat = () => {
-      const ids = [sid, host.state.focusedStoredSessionId.get(), host.state.focusedSessionId.get()].filter(Boolean)
-      void call('/ide/session', { ids }).catch(() => undefined)
+      announce(true)
+      void call('/ide/session', { ids: myIds() }).catch(() => undefined)
     }
     beat()
     const beatTimer = window.setInterval(beat, 60_000)
     ctx.onDispose(() => clearInterval(beatTimer))
+    ctx.addEventListener(window, 'pagehide', () => announce(false))
     ctx.onDispose(host.state.focusedStoredSessionId.listen(() => beat()))
     ctx.onEvent('tool.complete', onToolComplete)
     ctx.onEvent('message.complete', () => void applyPendingCwd())
@@ -223,6 +250,11 @@ export default {
     if (!__CATALOG__) watchLayout()
     // Catalog build: the Project UI toggle follows the Explorer panel's Run view.
     else ctx.onDispose($view.listen(() => noteTiles())) // listen, not subscribe: no call at boot, before any tile exists
-    void setupIdeWindow()
+    // Then the request this window was opened for (a file, a page, the project's UI, a new
+    // workspace's folder).
+    void setupIdeWindow().then(() => {
+      const p = takePending()
+      if (p) void handleOpenRequest(p)
+    })
   }
 }

@@ -123,7 +123,9 @@ export const $banners = atom<Record<string, Banner>>({})
 export const $treeVersion = atom(0)
 export const $reveal = atom<string | null>(null)
 export const $quickOpen = atom(false)
-export const $folderDialog = atom(false)
+/** The Open Folder dialog: closed, open, or open for a new IDE workspace (choose or create its
+ *  project folder; the chat always moves there). */
+export const $folderDialog = atom<boolean | 'workspace'>(false)
 export const $searchFocus = atom(0)
 export const $backend = atom<'unknown' | 'ok' | 'missing'>('unknown')
 
@@ -437,7 +439,8 @@ function setTabs(next: Tab[]) {
   persistTabs()
 }
 
-export async function openFile(path: string, opts: { line?: number; col?: number; preview?: boolean } = {}) {
+/** Show a file in the editor; resolves true when it is shown (the agent's ide_open reports it). */
+export async function openFile(path: string, opts: { line?: number; col?: number; preview?: boolean } = {}): Promise<boolean> {
   ensureEditor()
   const key = pathKey(path)
   const existing = $tabs.get().find(t => pathKey(t.path) === key)
@@ -448,7 +451,7 @@ export async function openFile(path: string, opts: { line?: number; col?: number
     $active.set(existing.path)
     post({ type: 'show', path: meta.get(key)!.path, line: opts.line, col: opts.col })
     persistTabs()
-    return
+    return true
   }
   let r: any
   try {
@@ -461,19 +464,19 @@ export async function openFile(path: string, opts: { line?: number; col?: number
       setTabs($tabs.get().filter(t => t !== existing))
       if ($active.get() === existing.path) $active.set($tabs.get()[0]?.path ?? null)
       notify('info', `${baseName(path)} no longer exists, so its tab was closed.`)
-      return
+      return false
     }
     notify('error', `Could not open ${baseName(path)}: ${msg}`)
-    return
+    return false
   }
   if (r.binary || r.too_large) {
     const what = r.too_large ? 'larger than 5 MB' : 'a binary file'
     if (/\.(png|jpe?g|gif|webp|svg|bmp|ico|pdf|mp4|webm)$/i.test(path)) {
       void openInBrowser(r.path)
-    } else {
-      notify('info', `${baseName(path)} is ${what}, so it is not opened in the editor.`)
+      return true
     }
-    return
+    notify('info', `${baseName(path)} is ${what}, so it is not opened in the editor.`)
+    return false
   }
   const saved = drafts()[pathKey(r.path)]
   const draft = saved?.t ?? null
@@ -502,6 +505,7 @@ export async function openFile(path: string, opts: { line?: number; col?: number
   $active.set(r.path)
   post({ type: 'open', path: r.path, text: draft ?? r.text, saved: r.text, eol: detectEol(r.text), line: opts.line, col: opts.col })
   persistTabs()
+  return true
 }
 
 export function activate(path: string) {
@@ -1065,12 +1069,40 @@ const OPEN_REQUEST = 'hermes-ide:open-window'
 const WINDOW_MARK = 'hermes-ide:window'
 const PENDING_OPEN = 'hermes-ide:pending-open'
 
-interface OpenRequest {
-  sid: string
-  at: number
+/** What an IDE window is asked to do: show a file or a page, run the project's UI (the agent's
+ *  ide_open), or ask for a new workspace's folder. `req` names the agent's request, answered
+ *  through ackRequest. */
+export interface Pending {
   path?: string
   line?: number
   url?: string
+  ui?: boolean
+  folder?: boolean
+  req?: string
+}
+
+interface OpenRequest extends Pending {
+  sid: string
+  at: number
+}
+
+const pendingOf = (r: Pending): Pending | null =>
+  r.path || r.url || r.ui || r.folder || r.req ? { path: r.path, line: r.line, url: r.url, ui: r.ui, folder: r.folder, req: r.req } : null
+
+/** Tell the agent's ide_open call what this window did (the tool waits for it). */
+export function ackRequest(req: string | undefined, status: string, detail = '', url = '') {
+  if (req) void call('/ide/ack', { request_id: req, status, detail, url }).catch(() => undefined)
+}
+
+/** The request this window was opened or reloaded for, once. */
+export function takePending(): Pending | null {
+  const raw = sessionStorage.getItem(PENDING_OPEN)
+  sessionStorage.removeItem(PENDING_OPEN)
+  try {
+    return raw ? pendingOf(JSON.parse(raw)) : null
+  } catch {
+    return null // malformed: ignore
+  }
 }
 
 const isPopout = () => new URLSearchParams(location.search).get('win') === 'secondary'
@@ -1101,9 +1133,8 @@ function claimRequest(): OpenRequest | null {
     return null
   }
   localStorage.removeItem(requestKey(sid))
-  if (req.path || req.url) {
-    sessionStorage.setItem(PENDING_OPEN, JSON.stringify({ path: req.path, line: req.line, url: req.url }))
-  }
+  const pending = pendingOf(req)
+  if (pending) sessionStorage.setItem(PENDING_OPEN, JSON.stringify(pending))
   return req
 }
 
@@ -1153,7 +1184,7 @@ export function unmarkIdeChat(ids: string[]) {
 }
 
 /** Main window: open the chat on screen in its own IDE window (or front the one it has). */
-export async function openIdeWindow(open?: { path?: string; line?: number; url?: string; sid?: string }) {
+export async function openIdeWindow(open?: Pending & { sid?: string }) {
   if (IDE_WINDOW) {
     showIde()
     return
@@ -1176,16 +1207,16 @@ export async function openIdeWindow(open?: { path?: string; line?: number; url?:
   }
   if (typeof host.openSession !== 'function') {
     notify('warning', 'This Hermes Desktop cannot open pop-out windows. Update Hermes Desktop.', 'Hermes IDE')
+    ackRequest(open?.req, 'error', 'This Hermes Desktop cannot open pop-out windows.')
     return
   }
-  const req: OpenRequest = { sid, at: Date.now(), ...(open?.path ? { path: open.path, line: open.line } : {}), ...(open?.url ? { url: open.url } : {}) }
+  const req: OpenRequest = { sid, at: Date.now(), ...pendingOf(open ?? {}) }
   // Already in a plain pop-out of this chat: the app would only re-front this window, and a
   // window never receives its own storage events, so convert it here.
   if (isPopout() && windowSessionId() === sid) {
     sessionStorage.setItem(WINDOW_MARK, '1')
-    if (req.path || req.url) {
-      sessionStorage.setItem(PENDING_OPEN, JSON.stringify({ path: req.path, line: req.line, url: req.url }))
-    }
+    const pending = pendingOf(req)
+    if (pending) sessionStorage.setItem(PENDING_OPEN, JSON.stringify(pending))
     location.reload()
     return
   }
@@ -1197,33 +1228,28 @@ export async function openIdeWindow(open?: { path?: string; line?: number; url?:
   } catch (e) {
     localStorage.removeItem(requestKey(sid))
     notify('error', `Could not open the IDE window: ${(e as Error).message}`, 'Hermes IDE')
+    ackRequest(open?.req, 'error', `Could not open the IDE window: ${(e as Error).message}`)
   }
 }
 
 /** Every pop-out listens: a request for its chat either converts a plain pop-out of that chat
  *  into the IDE (the app fronts the existing window instead of opening a second one) or, in the
  *  IDE window, carries a file to open. */
-export function onStorageRequest(e: StorageEvent) {
+export function onStorageRequest(e: StorageEvent): Pending | null {
   if (!e.key?.startsWith(OPEN_REQUEST + ':') || !e.newValue || !isPopout()) {
-    return
+    return null
   }
   const req = claimRequest()
   if (!req) {
-    return
+    return null
   }
   if (!IDE_WINDOW) {
     sessionStorage.setItem(WINDOW_MARK, '1')
     location.reload()
-    return
+    return null
   }
   showIde()
-  if (req.path) {
-    sessionStorage.removeItem(PENDING_OPEN)
-    void openFile(req.path, { line: req.line })
-  }
-  if (req.url) {
-    openInBrowser(req.url)
-  }
+  return takePending() // the IDE window acts on it (handleOpenRequest)
 }
 
 /** Wait `n` animation frames, or a moment when the window is not painting: a window behind
@@ -1352,22 +1378,7 @@ export async function setupIdeWindow() {
   // The chat's tabs were restored before the editor tile existed; load the active one now.
   const want = $active.get() ?? $tabs.get()[0]?.path
   if (want && !meta.has(pathKey(want)) && closers.has('editor')) activate(want)
-  // A file or page the window was opened for shows now.
-  const pending = sessionStorage.getItem(PENDING_OPEN)
-  if (pending) {
-    sessionStorage.removeItem(PENDING_OPEN)
-    try {
-      const p = JSON.parse(pending)
-      if (typeof p?.path === 'string') {
-        void openFile(p.path, { line: Number(p.line) > 0 ? Number(p.line) : undefined })
-      }
-      if (typeof p?.url === 'string') {
-        openInBrowser(p.url)
-      }
-    } catch {
-      /* malformed request: ignore */
-    }
-  }
+  // (The request the window was opened for runs after this: plugin.tsx, handleOpenRequest.)
   if (!__CATALOG__) {
     await frames(2)
     await fitColumns()

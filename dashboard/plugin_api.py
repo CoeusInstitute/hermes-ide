@@ -730,16 +730,40 @@ atexit.register(lambda: [stop_server(k) for k in list(SERVERS)])
 IDE_SESSIONS_FILE = "ide-sessions.json"
 
 
-def _ide_sessions_path() -> Path:
+def _data_dir() -> Path:
+    # The agent half reads here too (__init__.py): per profile, kept across updates.
     try:
         from plugins.plugin_storage import plugin_data_dir
 
-        return Path(plugin_data_dir("hermes-ide")) / IDE_SESSIONS_FILE
+        return Path(plugin_data_dir("hermes-ide"))
     except Exception:
-        home = Path(os.environ.get("HERMES_HOME") or Path.home() / ".hermes")
-        d = home / "plugin-data" / "hermes-ide"
+        d = Path(os.environ.get("HERMES_HOME") or Path.home() / ".hermes") / "plugin-data" / "hermes-ide"
         d.mkdir(parents=True, exist_ok=True)
-        return d / IDE_SESSIONS_FILE
+        return d
+
+
+def _ide_sessions_path() -> Path:
+    return _data_dir() / IDE_SESSIONS_FILE
+
+
+def note_ack(request_id: Any, status: Any, detail: Any = "", url: Any = "") -> dict[str, Any]:
+    """An IDE window's answer to the agent's ide_open request; the tool is polling for this file."""
+    if not isinstance(request_id, str) or not re.fullmatch(r"[0-9a-f]{32}", request_id):
+        raise HTTPException(400, "bad request_id")
+    d = _data_dir() / "acks"
+    d.mkdir(exist_ok=True)
+    now = time.time()
+    for old in d.glob("*.json"):  # answers nobody collected (the tool timed out)
+        try:
+            if now - old.stat().st_mtime > 3600:
+                old.unlink()
+        except OSError:
+            pass
+    f = d / f"{request_id}.json"
+    tmp = f.with_name(f.name + ".tmp")
+    tmp.write_text(json.dumps({"status": str(status)[:40], "detail": str(detail)[:4000], "url": str(url)[:2048]}), encoding="utf-8")
+    os.replace(tmp, f)
+    return {"ok": True}
 
 
 def note_ide_sessions(ids: list[Any]) -> dict[str, Any]:
@@ -811,6 +835,13 @@ def route_devserver_stop(body: dict) -> dict:
     if not isinstance(key, str) or key not in SERVERS:
         return {"ok": True}
     return stop_server(key)
+
+
+@router.post("/ide/ack")
+def route_ide_ack(body: dict) -> dict:
+    b = _body(body)
+    with _os_errors():
+        return note_ack(b.get("request_id"), b.get("status"), b.get("detail", ""), b.get("url", ""))
 
 
 @router.post("/ide/session")

@@ -30,7 +30,7 @@ import FRAME_HTML from 'virtual:frame-html'
 import { type EditorFrame, mountEditor } from './frame/editor'
 import { FullBrowserTile } from './full/browser-tile'
 import { useIdeRowClick } from './full/row-click'
-import { $sessionRows, age, durable, ideRows, startNewIdeChat } from './ide-chats'
+import { $sessionRows, age, durable, ideRows, newIdeWorkspace } from './ide-chats'
 
 import {
   $askTrust,
@@ -1339,10 +1339,11 @@ function QuickOpen() {
 function FolderDialog() {
   const open = useValue($folderDialog)
   const root = useValue($root)
+  const workspace = open === 'workspace'
   const [path, setPath] = useState('')
   const [apply, setApply] = useState(true)
   useEffect(() => {
-    if (open) setPath(root || '')
+    if (open) setPath(workspace ? '' : root || '')
   }, [open])
 
   const browse = async () => {
@@ -1352,32 +1353,57 @@ function FolderDialog() {
       void ctx.files.release?.(r.folder.id) // only the path is needed; the backend does the reading
     }
   }
-  const submit = async () => {
-    if (path.trim() && (await setRoot(path.trim(), apply))) $folderDialog.set(false)
+  const choose = async (dir: string) => {
+    // A new workspace's chat always works in its folder.
+    if (!(await setRoot(dir, workspace || apply))) return
+    $folderDialog.set(false)
+    const sid = host.state.focusedSessionId.get()
+    // Name a new workspace after its folder, so its session-list row says what it is.
+    if (workspace && sid) void host.request('session.title', { session_id: sid, title: baseName($root.get() || dir) }).catch(() => undefined)
+  }
+  const submit = () => (path.trim() ? choose(path.trim()) : undefined)
+  const create = async () => {
+    const dir = path.trim()
+    if (!dir) return
+    try {
+      await call('/fs/create', { path: dir, dir: true })
+    } catch (e) {
+      notify('error', `Could not create ${dir}: ${(e as Error).message}`)
+      return
+    }
+    await choose(dir)
   }
 
   return (
-    <Dialog open={open} onOpenChange={o => $folderDialog.set(o)}>
+    <Dialog open={!!open} onOpenChange={o => $folderDialog.set(o)}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Open Folder</DialogTitle>
+          <DialogTitle>{workspace ? 'Choose the project folder' : 'Open Folder'}</DialogTitle>
         </DialogHeader>
         <div className="hi-qo">
+          {workspace ? (
+            <div style={{ fontSize: 12.5, color: 'var(--ui-text-secondary)' }}>
+              This IDE workspace and its chat work in the folder you choose. Pick an existing folder, or type the path of a new one and choose Create folder.
+            </div>
+          ) : null}
           <div style={{ display: 'flex', gap: 6 }}>
             <input style={{ flex: 1 }} value={path} placeholder="C:/path/to/project or /home/me/project" onChange={e => setPath(e.target.value)} onKeyDown={e => e.key === 'Enter' && void submit()} spellCheck={false} autoFocus />
             {ctx.files?.requestFolder ? <Button variant="secondary" onClick={() => void browse()}>Browse…</Button> : null}
           </div>
-          <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 12.5, color: 'var(--ui-text-secondary)' }}>
-            <input type="checkbox" checked={apply} onChange={e => setApply(e.target.checked)} style={{ height: 'auto' }} />
-            Also move this chat's working directory here, so Hermes works in the same folder
-          </label>
+          {workspace ? null : (
+            <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 12.5, color: 'var(--ui-text-secondary)' }}>
+              <input type="checkbox" checked={apply} onChange={e => setApply(e.target.checked)} style={{ height: 'auto' }} />
+              Also move this chat's working directory here, so Hermes works in the same folder
+            </label>
+          )}
           {!host.state.focusedSessionId.get() ? (
             <div style={{ fontSize: 12, color: 'var(--ui-text-tertiary)' }}>
               This chat has not started yet. The folder is applied when its first reply finishes; to start a chat directly in a folder, use the composer's folder button.
             </div>
           ) : null}
           <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
-            {useValue($rootPicked) ? <Button variant="ghost" onClick={() => { followSession(); $folderDialog.set(false) }}>Follow the chat's folder</Button> : null}
+            {useValue($rootPicked) && !workspace ? <Button variant="ghost" onClick={() => { followSession(); $folderDialog.set(false) }}>Follow the chat's folder</Button> : null}
+            <Button variant="secondary" onClick={() => void create()} title="Create the folder typed above and open it">Create folder</Button>
             <Button onClick={() => void submit()}>Open</Button>
           </div>
         </div>
@@ -1395,7 +1421,7 @@ export function StatusItem() {
     return (
       <span className="hi-open-wrap">
         <Styles />
-        <button className="hi-open-ide" onClick={() => void openIdeWindow()} title="Open this chat in the Hermes IDE window (Ctrl+Alt+I)">
+        <button className="hi-open-ide" onClick={() => void newIdeWorkspace()} title="New IDE workspace: a new chat in its own IDE window, in a folder you choose. Ctrl+Alt+I opens the chat on screen in the IDE.">
           {icon('code')}
           <span>IDE</span>
         </button>
@@ -1461,7 +1487,7 @@ function IdeChatsMenu() {
         </div>
         <div className="hi-chats-sep" />
         <button className="hi-chat" onClick={() => { setOpen(false); void openIdeWindow() }}>{icon('code', 13)}<span className="hi-chat-title">Open this chat in the IDE</span><span className="hi-chat-age">Ctrl+Alt+I</span></button>
-        <button className="hi-chat" onClick={() => { setOpen(false); startNewIdeChat() }}>{icon('add', 13)}<span className="hi-chat-title">New IDE chat</span></button>
+        <button className="hi-chat" onClick={() => { setOpen(false); void newIdeWorkspace() }}>{icon('add', 13)}<span className="hi-chat-title">New IDE workspace</span></button>
       </PopoverContent>
     </Popover>
   )

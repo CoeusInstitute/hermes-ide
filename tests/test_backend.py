@@ -214,27 +214,76 @@ def test_git_status_and_head(client, tmp_path):
     assert head["text"].replace("\r\n", "\n") == "v1\n"
 
 
-def test_ide_open_tool_broadcasts(monkeypatch, tmp_path):
-    plugin = _load("hermes_ide_agent_half", ROOT / "__init__.py")
-    sent = []
+def _agent_with_ide(monkeypatch, tmp_path, answer):
+    """The agent half with a fake Desktop: every broadcast is answered by `answer(payload)` through
+    the backend's real /ide/ack writer, in the data folder both halves share."""
     import types
+    plugin = _load("hermes_ide_agent_half", ROOT / "__init__.py")
+    data = tmp_path / "plugin-data"
+    data.mkdir(exist_ok=True)
+    monkeypatch.setattr(plugin, "_data_dir", lambda: data)
+    monkeypatch.setattr(api, "_data_dir", lambda: data)
+    monkeypatch.setattr(plugin, "OPEN_WAIT", 1.2)
+    monkeypatch.setattr(plugin, "UI_WAIT", 2.0)
+    sent = []
+
+    def broadcast(pid, ev, payload):
+        sent.append((pid, ev, payload))
+        for status, detail, url in answer(payload):
+            api.note_ack(payload["request_id"], status, detail, url)
+
     fake = types.ModuleType("hermes_cli.plugin_events")
-    fake.broadcast_plugin_event = lambda pid, ev, payload: sent.append((pid, ev, payload))
+    fake.broadcast_plugin_event = broadcast
     monkeypatch.setitem(sys.modules, "hermes_cli.plugin_events", fake)
+    return plugin, sent
+
+
+def test_ide_open_reports_what_the_ide_window_did(monkeypatch, tmp_path):
+    plugin, sent = _agent_with_ide(monkeypatch, tmp_path, lambda p: [("opened", f"Showing {p.get('path') or p.get('url')}", p.get("url", ""))])
     f = tmp_path / "x.py"
     f.write_text("print(1)\n")
-    out = json.loads(plugin.handle_ide_open({"path": str(f), "line": 3}))
-    assert out["success"] and sent[0][:2] == ("hermes-ide", "open") and sent[0][2]["line"] == 3
-    assert "session_id" not in sent[0][2]
-    # The session id lets the right Desktop window (that chat's IDE window) act on it.
-    plugin.handle_ide_open({"path": str(f)}, session_id="s-123")
-    assert sent[1][2]["session_id"] == "s-123"
-    assert json.loads(plugin.handle_ide_open({"path": str(tmp_path / "missing.py")}))["success"] is False
-    # A url opens in the IDE Browser; only http(s) is accepted.
+    out = json.loads(plugin.handle_ide_open({"path": str(f), "line": 3}, session_id="s-123"))
+    assert out["success"] and out["status"] == "opened" and str(f.name) in out["detail"]
+    assert sent[0][:2] == ("hermes-ide", "open") and sent[0][2]["line"] == 3 and sent[0][2]["session_id"] == "s-123"
+    assert len(sent[0][2]["request_id"]) == 32
     out = json.loads(plugin.handle_ide_open({"url": "http://localhost:5173/"}, session_id="s-9"))
-    assert out["success"] and sent[-1][2] == {"url": "http://localhost:5173/", "session_id": "s-9"}
+    assert out["success"] and out["url"] == "http://localhost:5173/"
+    # Refused before anything is sent.
+    n = len(sent)
+    assert json.loads(plugin.handle_ide_open({"path": str(tmp_path / "missing.py")}))["success"] is False
     assert json.loads(plugin.handle_ide_open({"url": "file:///etc/passwd"}))["success"] is False
     assert json.loads(plugin.handle_ide_open({}))["success"] is False
+    assert len(sent) == n
+
+
+def test_ide_open_without_an_answering_window_says_so(monkeypatch, tmp_path):
+    plugin, _ = _agent_with_ide(monkeypatch, tmp_path, lambda p: [])
+    out = json.loads(plugin.handle_ide_open({"ui": True}, session_id="s-1"))
+    assert out["success"] is False and out["status"] == "no_window" and "Hermes Desktop" in out["error"]
+
+
+def test_ide_open_ui_waits_through_trust_to_the_running_page(monkeypatch, tmp_path):
+    # The IDE asks the user first, then reports the page once the server is ready.
+    steps = [("needs_trust", "Found a Vite app", ""), ("running", "The Vite app is running", "http://localhost:5173/")]
+    plugin, sent = _agent_with_ide(monkeypatch, tmp_path, lambda p: steps)
+    out = json.loads(plugin.handle_ide_open({"ui": True}, session_id="s-2"))
+    assert sent[0][2]["ui"] is True and "path" not in sent[0][2]
+    assert out == {"success": True, "status": "running", "detail": "The Vite app is running", "url": "http://localhost:5173/"}
+    # Still waiting for the user at the deadline: the latest status, so the agent can tell them.
+    plugin2, _ = _agent_with_ide(monkeypatch, tmp_path, lambda p: steps[:1])
+    out = json.loads(plugin2.handle_ide_open({"ui": True}, session_id="s-3"))
+    assert out["success"] and out["status"] == "needs_trust"
+    # No UI in the folder is a final answer, not a success.
+    plugin3, _ = _agent_with_ide(monkeypatch, tmp_path, lambda p: [("no_ui", "No web UI was found", "")])
+    assert json.loads(plugin3.handle_ide_open({"ui": True}, session_id="s-4"))["success"] is False
+
+
+def test_ide_ack_route_validates_and_stores(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(api, "_data_dir", lambda: tmp_path)
+    rid = "a" * 32
+    assert post(client, "/ide/ack", request_id=rid, status="running", detail="ok", url="http://localhost:5173/").status_code == 200
+    assert json.loads((tmp_path / "acks" / f"{rid}.json").read_text())["status"] == "running"
+    assert post(client, "/ide/ack", request_id="../../evil", status="x").status_code == 400
 
 
 # ── project UI detection and dev servers ───────────────────────────────────────────────────

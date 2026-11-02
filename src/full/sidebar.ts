@@ -9,7 +9,7 @@
 // appear and nothing is hidden: the badges and the click still work.
 
 import { $ideChats, ctx, openIdeWindow, unmarkIdeChat } from '../core'
-import { $sessionRows, age, durable, ideRows, matches, startNewIdeChat } from '../ide-chats'
+import { $sessionRows, age, durable, ideRows, matches, newIdeWorkspace } from '../ide-chats'
 
 const CSS = `
 .hi-sb{margin:2px 0 4px}
@@ -75,11 +75,11 @@ function render() {
   }
   const add = el('button', 'hi-sb-add')
   add.type = 'button'
-  add.title = 'New IDE chat: opens in the IDE after your first message'
+  add.title = 'New IDE workspace: a new chat in its own IDE window, in a folder you choose'
   add.append(codicon('add'))
   add.onclick = e => {
     e.stopPropagation()
-    startNewIdeChat()
+    void newIdeWorkspace()
   }
   head.append(label, add)
   group.append(head)

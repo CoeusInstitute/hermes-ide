@@ -451,26 +451,18 @@ function setTabs(next) {
 async function openFile(path, opts = {}) {
   ensureEditor();
   let key = pathKey(path), existing = $tabs.get().find((t2) => pathKey(t2.path) === key);
-  if (existing && meta.has(key)) {
-    !opts.preview && existing.preview && setTabs($tabs.get().map((t2) => t2 === existing ? { ...t2, preview: !1 } : t2)), $active.set(existing.path), post({ type: "show", path: meta.get(key).path, line: opts.line, col: opts.col }), persistTabs();
-    return;
-  }
+  if (existing && meta.has(key))
+    return !opts.preview && existing.preview && setTabs($tabs.get().map((t2) => t2 === existing ? { ...t2, preview: !1 } : t2)), $active.set(existing.path), post({ type: "show", path: meta.get(key).path, line: opts.line, col: opts.col }), persistTabs(), !0;
   let r;
   try {
     r = await call("/fs/read", { path });
   } catch (e) {
     let msg = String(e.message);
-    if (/\b404\b/.test(msg) && existing) {
-      setTabs($tabs.get().filter((t2) => t2 !== existing)), $active.get() === existing.path && $active.set($tabs.get()[0]?.path ?? null), notify("info", `${baseName(path)} no longer exists, so its tab was closed.`);
-      return;
-    }
-    notify("error", `Could not open ${baseName(path)}: ${msg}`);
-    return;
+    return /\b404\b/.test(msg) && existing ? (setTabs($tabs.get().filter((t2) => t2 !== existing)), $active.get() === existing.path && $active.set($tabs.get()[0]?.path ?? null), notify("info", `${baseName(path)} no longer exists, so its tab was closed.`), !1) : (notify("error", `Could not open ${baseName(path)}: ${msg}`), !1);
   }
   if (r.binary || r.too_large) {
     let what = r.too_large ? "larger than 5 MB" : "a binary file";
-    /\.(png|jpe?g|gif|webp|svg|bmp|ico|pdf|mp4|webm)$/i.test(path) ? openInBrowser(r.path) : notify("info", `${baseName(path)} is ${what}, so it is not opened in the editor.`);
-    return;
+    return /\.(png|jpe?g|gif|webp|svg|bmp|ico|pdf|mp4|webm)$/i.test(path) ? (openInBrowser(r.path), !0) : (notify("info", `${baseName(path)} is ${what}, so it is not opened in the editor.`), !1);
   }
   let saved = drafts()[pathKey(r.path)], draft = saved?.t ?? null, stale = draft != null && !!saved?.m && saved.m !== r.mtime && draft !== r.text;
   meta.set(pathKey(r.path), { path: r.path, mtime: stale ? saved.m : r.mtime, eol: detectEol(r.text), bom: !!r.bom, savedText: r.text, draft }), stale && setBanner(r.path, { kind: "conflict", diskText: r.text, diskMtime: r.mtime });
@@ -486,7 +478,7 @@ async function openFile(path, opts = {}) {
     let activeIdx = tabs.findIndex((t2) => t2.path === $active.get());
     tabs.splice(activeIdx >= 0 ? activeIdx + 1 : tabs.length, 0, tab3);
   }
-  setTabs(tabs), $active.set(r.path), post({ type: "open", path: r.path, text: draft ?? r.text, saved: r.text, eol: detectEol(r.text), line: opts.line, col: opts.col }), persistTabs();
+  return setTabs(tabs), $active.set(r.path), post({ type: "open", path: r.path, text: draft ?? r.text, saved: r.text, eol: detectEol(r.text), line: opts.line, col: opts.col }), persistTabs(), !0;
 }
 function activate(path) {
   let m = meta.get(pathKey(path));
@@ -769,7 +761,21 @@ function showIde() {
   let tabs = $tabs.get(), want = $active.get() ?? tabs[0]?.path;
   want && !meta.has(pathKey(want)) && activate(want);
 }
-var OPEN_REQUEST = "hermes-ide:open-window", WINDOW_MARK = "hermes-ide:window", PENDING_OPEN = "hermes-ide:pending-open", isPopout = () => new URLSearchParams(location.search).get("win") === "secondary";
+var OPEN_REQUEST = "hermes-ide:open-window", WINDOW_MARK = "hermes-ide:window", PENDING_OPEN = "hermes-ide:pending-open", pendingOf = (r) => r.path || r.url || r.ui || r.folder || r.req ? { path: r.path, line: r.line, url: r.url, ui: r.ui, folder: r.folder, req: r.req } : null;
+function ackRequest(req, status, detail = "", url = "") {
+  req && call("/ide/ack", { request_id: req, status, detail, url }).catch(() => {
+  });
+}
+function takePending() {
+  let raw = sessionStorage.getItem(PENDING_OPEN);
+  sessionStorage.removeItem(PENDING_OPEN);
+  try {
+    return raw ? pendingOf(JSON.parse(raw)) : null;
+  } catch {
+    return null;
+  }
+}
+var isPopout = () => new URLSearchParams(location.search).get("win") === "secondary";
 function windowSessionId() {
   let m = /^#\/([^/?#]+)/.exec(location.hash);
   return m ? decodeURIComponent(m[1]) : host.state.focusedStoredSessionId.get() || null;
@@ -785,7 +791,11 @@ function readRequest(sid) {
 }
 function claimRequest() {
   let sid = windowSessionId(), req = sid ? readRequest(sid) : null;
-  return !req || !sid || req.sid !== sid || Date.now() - req.at > 6e4 ? null : (localStorage.removeItem(requestKey(sid)), (req.path || req.url) && sessionStorage.setItem(PENDING_OPEN, JSON.stringify({ path: req.path, line: req.line, url: req.url })), req);
+  if (!req || !sid || req.sid !== sid || Date.now() - req.at > 6e4)
+    return null;
+  localStorage.removeItem(requestKey(sid));
+  let pending = pendingOf(req);
+  return pending && sessionStorage.setItem(PENDING_OPEN, JSON.stringify(pending)), req;
 }
 function detectIdeWindow() {
   return isPopout() ? sessionStorage.getItem(WINDOW_MARK) === "1" ? !0 : claimRequest() ? (sessionStorage.setItem(WINDOW_MARK, "1"), !0) : !1 : !1;
@@ -822,32 +832,25 @@ async function openIdeWindow(open) {
     return;
   }
   if (typeof host.openSession != "function") {
-    notify("warning", "This Hermes Desktop cannot open pop-out windows. Update Hermes Desktop.", "Hermes IDE");
+    notify("warning", "This Hermes Desktop cannot open pop-out windows. Update Hermes Desktop.", "Hermes IDE"), ackRequest(open?.req, "error", "This Hermes Desktop cannot open pop-out windows.");
     return;
   }
-  let req = { sid, at: Date.now(), ...open?.path ? { path: open.path, line: open.line } : {}, ...open?.url ? { url: open.url } : {} };
+  let req = { sid, at: Date.now(), ...pendingOf(open ?? {}) };
   if (isPopout() && windowSessionId() === sid) {
-    sessionStorage.setItem(WINDOW_MARK, "1"), (req.path || req.url) && sessionStorage.setItem(PENDING_OPEN, JSON.stringify({ path: req.path, line: req.line, url: req.url })), location.reload();
+    sessionStorage.setItem(WINDOW_MARK, "1");
+    let pending = pendingOf(req);
+    pending && sessionStorage.setItem(PENDING_OPEN, JSON.stringify(pending)), location.reload();
     return;
   }
   localStorage.setItem(requestKey(sid), JSON.stringify(req)), markIdeChat(sid);
   try {
     await host.openSession(sid, { intent: "window" });
   } catch (e) {
-    localStorage.removeItem(requestKey(sid)), notify("error", `Could not open the IDE window: ${e.message}`, "Hermes IDE");
+    localStorage.removeItem(requestKey(sid)), notify("error", `Could not open the IDE window: ${e.message}`, "Hermes IDE"), ackRequest(open?.req, "error", `Could not open the IDE window: ${e.message}`);
   }
 }
 function onStorageRequest(e) {
-  if (!e.key?.startsWith(OPEN_REQUEST + ":") || !e.newValue || !isPopout())
-    return;
-  let req = claimRequest();
-  if (req) {
-    if (!IDE_WINDOW) {
-      sessionStorage.setItem(WINDOW_MARK, "1"), location.reload();
-      return;
-    }
-    showIde(), req.path && (sessionStorage.removeItem(PENDING_OPEN), openFile(req.path, { line: req.line })), req.url && openInBrowser(req.url);
-  }
+  return !e.key?.startsWith(OPEN_REQUEST + ":") || !e.newValue || !isPopout() || !claimRequest() ? null : IDE_WINDOW ? (showIde(), takePending()) : (sessionStorage.setItem(WINDOW_MARK, "1"), location.reload(), null);
 }
 var frames = (n = 2) => new Promise((resolve) => {
   let timer = setTimeout(resolve, 80 * n), step = () => --n <= 0 ? (clearTimeout(timer), resolve()) : requestAnimationFrame(step);
@@ -904,17 +907,7 @@ function maximizeOnce() {
 async function setupIdeWindow() {
   markIdeChat(windowSessionId()), maximizeOnce(), fullWindowSetup(), await maximized(), await sizeSettled(), await hideSessionList(), await restoreLayout();
   let want = $active.get() ?? $tabs.get()[0]?.path;
-  want && !meta.has(pathKey(want)) && closers.has("editor") && activate(want);
-  let pending = sessionStorage.getItem(PENDING_OPEN);
-  if (pending) {
-    sessionStorage.removeItem(PENDING_OPEN);
-    try {
-      let p = JSON.parse(pending);
-      typeof p?.path == "string" && openFile(p.path, { line: Number(p.line) > 0 ? Number(p.line) : void 0 }), typeof p?.url == "string" && openInBrowser(p.url);
-    } catch {
-    }
-  }
-  await frames(2), await fitColumns(), layoutState.ready = !0, saveLayout();
+  want && !meta.has(pathKey(want)) && closers.has("editor") && activate(want), await frames(2), await fitColumns(), layoutState.ready = !0, saveLayout();
 }
 function runCommand(id2) {
   let active = $active.get();
@@ -1064,6 +1057,39 @@ function track(s) {
       }
   };
   poll = window.setInterval(tick, 1500), tick();
+}
+var sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), live = (s) => !!s && s.state !== "exited";
+async function handleOpenRequest(p) {
+  if (p.folder && $folderDialog.set("workspace"), p.path) {
+    let line = Number(p.line) > 0 ? Number(p.line) : void 0, shown = await openFile(p.path, { line });
+    ackRequest(p.req, shown ? "opened" : "error", shown ? `Showing ${p.path}${line ? ` at line ${line}` : ""} in the IDE's editor.` : `The IDE could not open ${p.path}; it showed the user why.`);
+  }
+  p.url && (openInBrowser(p.url), ackRequest(p.req, "opened", `Showing ${p.url} in the IDE's Browser column.`, p.url)), p.ui && await runUiForAgent(p.req), !p.path && !p.url && !p.ui && ackRequest(p.req, "opened", "The chat's IDE window is open.");
+}
+async function runUiForAgent(req) {
+  let say = (status, detail, url = "") => ackRequest(req, status, detail, url);
+  for (let i = 0; i < 25 && !$root.get(); i++) await sleep(200);
+  let root = $root.get();
+  if (!root) return say("no_folder", "The IDE has no folder open. Ask the user to choose one (IDE: Open Folder).");
+  await detectProject(!0);
+  let c2 = selected();
+  if (!c2)
+    return say("no_ui", `No web UI was found in ${root}: no package.json dev script that runs a known framework's dev server (Vite, Next.js, Nuxt, Remix, SvelteKit, Astro, Angular, CRA and similar, at the root, one level down, or in apps/* or packages/*) and no index.html. Python web UIs are not detected.`);
+  let what = `${c2.kind === "static" ? "static site" : `${c2.framework} app`}${c2.rel ? ` in ${c2.rel}` : ""}`;
+  openTile("browser"), trusted().includes(trustKey(c2)) ? live($server.get()) || await startUi() : ($askTrust.set(c2), say("needs_trust", `Found a ${what} (${c2.command}${c2.run ? `: ${c2.run}` : ""}). It runs the project's own code, so the IDE is asking the user to allow it (Always run for this project, or Run once) in its Browser column; it starts when they do.`));
+  for (let until = Date.now() + 5e4; Date.now() < until; await sleep(1e3)) {
+    let s2 = $server.get();
+    if (s2?.id === c2.id) {
+      if (s2.state === "ready" && s2.url)
+        return say("running", `The ${what} is running at ${s2.url} and showing in the IDE's Browser column.`, s2.url);
+      if (s2.state === "exited")
+        return say("error", `The ${what}'s dev server exited${s2.exit_code != null ? ` with code ${s2.exit_code}` : ""}. Last output:
+${s2.log.slice(-8).join(`
+`)}`);
+    }
+  }
+  let s = $server.get();
+  say(s?.id === c2.id ? "starting" : "needs_trust", s?.id === c2.id ? `The ${what} is still ${s.state}; the IDE shows it when it is ready.` : `Still waiting for the user to allow the ${what} in the IDE.`);
 }
 function initBrowser() {
   $trusted.set(trusted()), ctx.onDispose($root.subscribe(() => void detectProject())), ctx.onDispose($runUiRequest.subscribe((n) => n && void (selected() ? startUi() : detectProject(!0)))), ctx.onDispose(() => clearInterval(poll));
@@ -1307,7 +1333,7 @@ function servedUrl(path) {
 
 // src/ide-chats.ts
 import { atom as atom3, host as host3 } from "@hermes/plugin-sdk";
-var $sessionRows = atom3([]), known = /* @__PURE__ */ new Set(), durable = (r) => r._lineage_root_id || r.id, matches = (r, id2) => r.id === id2 || r._lineage_root_id === id2;
+var $sessionRows = atom3([]), durable = (r) => r._lineage_root_id || r.id, matches = (r, id2) => r.id === id2 || r._lineage_root_id === id2;
 function age(sec) {
   if (!sec) return "";
   let m = Math.max(0, (Date.now() / 1e3 - sec) / 60);
@@ -1325,7 +1351,7 @@ async function refreshRows() {
     return;
   }
   let rows = $sessionRows.get();
-  known = new Set(rows.flatMap((r) => [r.id, durable(r)])), loadIdeChats();
+  loadIdeChats();
   let chats = $ideChats.get(), changed = !1, next = {};
   for (let [id2, at] of Object.entries(chats)) {
     let row = rows.find((r) => matches(r, id2)), key = row ? durable(row) : id2;
@@ -1333,9 +1359,18 @@ async function refreshRows() {
   }
   changed && setIdeChats(next);
 }
-var pendingNewSince = 0;
-function startNewIdeChat() {
-  pendingNewSince = Date.now(), host3.newChat(host3.state.profile.get() || null), notify("info", "Send the first message; this chat then opens in the IDE.", "Hermes IDE");
+var WORKSPACE_SEED = "This chat is a Hermes IDE workspace: the user works in its Hermes IDE window, with the project folder in an Explorer, a code editor and the project's running web UI beside this chat. For how to work with the IDE, load the skill hermes-ide:guide.";
+async function newIdeWorkspace() {
+  let sid;
+  try {
+    let r = await host3.request("session.create", { messages: [{ role: "system", content: WORKSPACE_SEED, display_kind: "hidden" }] });
+    sid = r?.stored_session_id || r?.session_id;
+  } catch (e) {
+    notify("error", `Could not start a new IDE workspace: ${e.message}`, "Hermes IDE");
+    return;
+  }
+  if (!sid) return notify("error", "Could not start a new IDE workspace: the gateway returned no session.", "Hermes IDE");
+  markIdeChat(sid), await openIdeWindow({ sid, folder: !0 }), refreshRows();
 }
 function initIdeChats() {
   let onStorage = (e) => {
@@ -1345,11 +1380,9 @@ function initIdeChats() {
   let tick = window.setInterval(onFocus, 6e4), offTurn = host3.onEvent?.("message.complete", (ev) => {
     let sid = ev?.payload?.session_id ?? ev?.session_id, rows = $sessionRows.get();
     (!sid || Object.keys($ideChats.get()).some((id2) => id2 === sid || rows.some((r) => matches(r, id2) && matches(r, sid)))) && refreshRows();
-  }), offFocus = host3.state.focusedStoredSessionId.subscribe((id2) => {
-    pendingNewSince && id2 && !known.has(id2) && (Date.now() - pendingNewSince < 30 * 6e4 && openIdeWindow({ sid: id2 }), pendingNewSince = 0);
   });
   refreshRows(), ctx.onDispose(() => {
-    window.removeEventListener("storage", onStorage), window.removeEventListener("focus", onFocus), clearInterval(tick), offTurn?.(), offFocus();
+    window.removeEventListener("storage", onStorage), window.removeEventListener("focus", onFocus), clearInterval(tick), offTurn?.();
   });
 }
 
@@ -1393,8 +1426,8 @@ function render() {
     collapsed = !collapsed, ctx.storage.set("sidebarCollapsed", collapsed), render();
   };
   let add2 = el("button", "hi-sb-add");
-  if (add2.type = "button", add2.title = "New IDE chat: opens in the IDE after your first message", add2.append(codicon("add")), add2.onclick = (e) => {
-    e.stopPropagation(), startNewIdeChat();
+  if (add2.type = "button", add2.title = "New IDE workspace: a new chat in its own IDE window, in a folder you choose", add2.append(codicon("add")), add2.onclick = (e) => {
+    e.stopPropagation(), newIdeWorkspace();
   }, head.append(label, add2), group.append(head), !collapsed) {
     if (!list2.length) {
       group.append(el("div", "hi-sb-empty", "Chats you open in the IDE are listed here."));
@@ -2978,12 +3011,12 @@ var Prec = {
 function flatten(extension, compartments, newCompartments) {
   let result = [[], [], [], [], []], seen = /* @__PURE__ */ new Map();
   function inner(ext, prec2) {
-    let known2 = seen.get(ext);
-    if (known2 != null) {
-      if (known2 <= prec2)
+    let known = seen.get(ext);
+    if (known != null) {
+      if (known <= prec2)
         return;
-      let found = result[known2].indexOf(ext);
-      found > -1 && result[known2].splice(found, 1), ext instanceof CompartmentInstance && newCompartments.delete(ext.compartment);
+      let found = result[known].indexOf(ext);
+      found > -1 && result[known].splice(found, 1), ext instanceof CompartmentInstance && newCompartments.delete(ext.compartment);
     }
     if (seen.set(ext, prec2), Array.isArray(ext))
       for (let e of ext)
@@ -3967,8 +4000,8 @@ function findSharedChunks(a2, b, textDiff) {
   let shared = /* @__PURE__ */ new Set();
   for (let set of b)
     for (let i = 0; i < set.chunk.length; i++) {
-      let known2 = inA.get(set.chunk[i]);
-      known2 != null && (textDiff ? textDiff.mapPos(known2) : known2) == set.chunkPos[i] && !textDiff?.touchesRange(known2, known2 + set.chunk[i].length) && shared.add(set.chunk[i]);
+      let known = inA.get(set.chunk[i]);
+      known != null && (textDiff ? textDiff.mapPos(known) : known) == set.chunkPos[i] && !textDiff?.touchesRange(known, known + set.chunk[i].length) && shared.add(set.chunk[i]);
     }
   return shared;
 }
@@ -9784,8 +9817,8 @@ var EditContextManager = class {
   the return value of this method.
   */
   plugin(plugin) {
-    let known2 = this.pluginMap.get(plugin);
-    return (known2 === void 0 || known2 && known2.plugin != plugin) && this.pluginMap.set(plugin, known2 = this.plugins.find((p) => p.plugin == plugin) || null), known2 && known2.update(this).value;
+    let known = this.pluginMap.get(plugin);
+    return (known === void 0 || known && known.plugin != plugin) && this.pluginMap.set(plugin, known = this.plugins.find((p) => p.plugin == plugin) || null), known && known.update(this).value;
   }
   /**
   The top position of the document, in screen coordinates. This
@@ -10951,17 +10984,17 @@ var Outside = "-10000px", TooltipViewManager = class {
     }
     let tooltipViews = [], newAbove = above ? [] : null;
     for (let i = 0; i < tooltips.length; i++) {
-      let tip = tooltips[i], known2 = -1;
+      let tip = tooltips[i], known = -1;
       if (tip) {
         for (let i2 = 0; i2 < this.tooltips.length; i2++) {
           let other = this.tooltips[i2];
-          other && other.create == tip.create && (known2 = i2);
+          other && other.create == tip.create && (known = i2);
         }
-        if (known2 < 0)
+        if (known < 0)
           tooltipViews[i] = this.createTooltipView(tip, i ? tooltipViews[i - 1] : null), newAbove && (newAbove[i] = !!tip.above);
         else {
-          let tooltipView = tooltipViews[i] = this.tooltipViews[known2];
-          newAbove && (newAbove[i] = above[known2]), tooltipView.update && tooltipView.update(update);
+          let tooltipView = tooltipViews[i] = this.tooltipViews[known];
+          newAbove && (newAbove[i] = above[known]), tooltipView.update && tooltipView.update(update);
         }
       }
     }
@@ -11240,8 +11273,8 @@ var panelPlugin = /* @__PURE__ */ ViewPlugin.fromClass(class {
     if (input != this.input) {
       let specs = input.filter((x) => x), panels = [], top2 = [], bottom = [], mount = [];
       for (let spec of specs) {
-        let known2 = this.specs.indexOf(spec), panel;
-        known2 < 0 ? (panel = spec(update.view), mount.push(panel)) : (panel = this.panels[known2], panel.update && panel.update(update)), panels.push(panel), (panel.top ? top2 : bottom).push(panel);
+        let known = this.specs.indexOf(spec), panel;
+        known < 0 ? (panel = spec(update.view), mount.push(panel)) : (panel = this.panels[known], panel.update && panel.update(update)), panels.push(panel), (panel.top ? top2 : bottom).push(panel);
       }
       this.specs = specs, this.panels = panels, this.top.sync(top2), this.bottom.sync(bottom);
       for (let p of mount)
@@ -11481,8 +11514,8 @@ var gutterView = /* @__PURE__ */ ViewPlugin.fromClass(class {
       change = !0;
       let gutters2 = [];
       for (let conf of cur2) {
-        let known2 = prev.indexOf(conf);
-        known2 < 0 ? gutters2.push(new SingleGutterView(this.view, conf)) : (this.gutters[known2].update(update), gutters2.push(this.gutters[known2]));
+        let known = prev.indexOf(conf);
+        known < 0 ? gutters2.push(new SingleGutterView(this.view, conf)) : (this.gutters[known].update(update), gutters2.push(this.gutters[known]));
       }
       for (let g of this.gutters)
         g.dom.remove(), gutters2.indexOf(g) < 0 && g.destroy();
@@ -15655,9 +15688,9 @@ function createTokenType(extra, tagStr) {
   }
   if (!tags$1.length)
     return 0;
-  let name2 = tagStr.replace(/ /g, "_"), key = name2 + " " + tags$1.map((t2) => t2.id), known2 = byTag[key];
-  if (known2)
-    return known2.id;
+  let name2 = tagStr.replace(/ /g, "_"), key = name2 + " " + tags$1.map((t2) => t2.id), known = byTag[key];
+  if (known)
+    return known.id;
   let type = byTag[key] = NodeType.define({
     id: typeArray.length,
     name: name2,
@@ -15801,8 +15834,8 @@ var SourceCache = /* @__PURE__ */ new WeakMap();
 function asSource(source) {
   if (!Array.isArray(source))
     return source;
-  let known2 = SourceCache.get(source);
-  return known2 || SourceCache.set(source, known2 = completeFromList(source)), known2;
+  let known = SourceCache.get(source);
+  return known || SourceCache.set(source, known = completeFromList(source)), known;
 }
 var startCompletionEffect = /* @__PURE__ */ StateEffect.define(), closeCompletionEffect = /* @__PURE__ */ StateEffect.define(), FuzzyMatcher = class {
   constructor(pattern) {
@@ -20138,9 +20171,9 @@ function astTop(node) {
 }
 function variableNames(doc2, node, isVariable) {
   if (node.to - node.from > 4096) {
-    let known2 = VariablesByNode.get(node);
-    if (known2)
-      return known2;
+    let known = VariablesByNode.get(node);
+    if (known)
+      return known;
     let result = [], seen = /* @__PURE__ */ new Set(), cursor = node.cursor(IterMode.IncludeAnonymous);
     if (cursor.firstChild())
       do
@@ -29004,9 +29037,9 @@ var DeletionWidgets = /* @__PURE__ */ new WeakMap(), DeletionWidget = class exte
   }
 };
 function deletionWidget(state, chunk, hideContent) {
-  let known2 = DeletionWidgets.get(chunk.changes);
-  if (known2)
-    return known2;
+  let known = DeletionWidgets.get(chunk.changes);
+  if (known)
+    return known;
   let buildDOM = (view) => {
     let { highlightChanges, syntaxHighlightDeletions, syntaxHighlightDeletionsMaxLength, mergeControls } = state.facet(mergeConfig), dom = document.createElement("div");
     if (dom.className = "cm-deletedChunk", mergeControls) {
@@ -31280,32 +31313,49 @@ function QuickOpen() {
   ] }) });
 }
 function FolderDialog() {
-  let open = useValue2($folderDialog), root = useValue2($root), [path, setPath] = useState2(""), [apply, setApply] = useState2(!0);
+  let open = useValue2($folderDialog), root = useValue2($root), workspace = open === "workspace", [path, setPath] = useState2(""), [apply, setApply] = useState2(!0);
   useEffect2(() => {
-    open && setPath(root || "");
+    open && setPath(workspace ? "" : root || "");
   }, [open]);
   let browse = async () => {
     let r = await ctx.files?.requestFolder?.();
     r?.ok && r.folder && (setPath(r.folder.path), ctx.files.release?.(r.folder.id));
-  }, submit = async () => {
-    path.trim() && await setRoot(path.trim(), apply) && $folderDialog.set(!1);
+  }, choose = async (dir) => {
+    if (!await setRoot(dir, workspace || apply)) return;
+    $folderDialog.set(!1);
+    let sid = host4.state.focusedSessionId.get();
+    workspace && sid && host4.request("session.title", { session_id: sid, title: baseName($root.get() || dir) }).catch(() => {
+    });
+  }, submit = () => path.trim() ? choose(path.trim()) : void 0, create = async () => {
+    let dir = path.trim();
+    if (dir) {
+      try {
+        await call("/fs/create", { path: dir, dir: !0 });
+      } catch (e) {
+        notify("error", `Could not create ${dir}: ${e.message}`);
+        return;
+      }
+      await choose(dir);
+    }
   };
-  return /* @__PURE__ */ jsx3(Dialog, { open, onOpenChange: (o) => $folderDialog.set(o), children: /* @__PURE__ */ jsxs2(DialogContent, { children: [
-    /* @__PURE__ */ jsx3(DialogHeader, { children: /* @__PURE__ */ jsx3(DialogTitle, { children: "Open Folder" }) }),
+  return /* @__PURE__ */ jsx3(Dialog, { open: !!open, onOpenChange: (o) => $folderDialog.set(o), children: /* @__PURE__ */ jsxs2(DialogContent, { children: [
+    /* @__PURE__ */ jsx3(DialogHeader, { children: /* @__PURE__ */ jsx3(DialogTitle, { children: workspace ? "Choose the project folder" : "Open Folder" }) }),
     /* @__PURE__ */ jsxs2("div", { className: "hi-qo", children: [
+      workspace ? /* @__PURE__ */ jsx3("div", { style: { fontSize: 12.5, color: "var(--ui-text-secondary)" }, children: "This IDE workspace and its chat work in the folder you choose. Pick an existing folder, or type the path of a new one and choose Create folder." }) : null,
       /* @__PURE__ */ jsxs2("div", { style: { display: "flex", gap: 6 }, children: [
         /* @__PURE__ */ jsx3("input", { style: { flex: 1 }, value: path, placeholder: "C:/path/to/project or /home/me/project", onChange: (e) => setPath(e.target.value), onKeyDown: (e) => e.key === "Enter" && void submit(), spellCheck: !1, autoFocus: !0 }),
         ctx.files?.requestFolder ? /* @__PURE__ */ jsx3(Button2, { variant: "secondary", onClick: () => void browse(), children: "Browse\u2026" }) : null
       ] }),
-      /* @__PURE__ */ jsxs2("label", { style: { display: "flex", gap: 8, alignItems: "center", fontSize: 12.5, color: "var(--ui-text-secondary)" }, children: [
+      workspace ? null : /* @__PURE__ */ jsxs2("label", { style: { display: "flex", gap: 8, alignItems: "center", fontSize: 12.5, color: "var(--ui-text-secondary)" }, children: [
         /* @__PURE__ */ jsx3("input", { type: "checkbox", checked: apply, onChange: (e) => setApply(e.target.checked), style: { height: "auto" } }),
         "Also move this chat's working directory here, so Hermes works in the same folder"
       ] }),
       host4.state.focusedSessionId.get() ? null : /* @__PURE__ */ jsx3("div", { style: { fontSize: 12, color: "var(--ui-text-tertiary)" }, children: "This chat has not started yet. The folder is applied when its first reply finishes; to start a chat directly in a folder, use the composer's folder button." }),
       /* @__PURE__ */ jsxs2("div", { style: { display: "flex", gap: 6, justifyContent: "flex-end" }, children: [
-        useValue2($rootPicked) ? /* @__PURE__ */ jsx3(Button2, { variant: "ghost", onClick: () => {
+        useValue2($rootPicked) && !workspace ? /* @__PURE__ */ jsx3(Button2, { variant: "ghost", onClick: () => {
           followSession(), $folderDialog.set(!1);
         }, children: "Follow the chat's folder" }) : null,
+        /* @__PURE__ */ jsx3(Button2, { variant: "secondary", onClick: () => void create(), title: "Create the folder typed above and open it", children: "Create folder" }),
         /* @__PURE__ */ jsx3(Button2, { onClick: () => void submit(), children: "Open" })
       ] })
     ] })
@@ -31326,7 +31376,7 @@ function StatusItem() {
     /* @__PURE__ */ jsx3("span", { children: cursor.lang })
   ] }) : /* @__PURE__ */ jsxs2("span", { className: "hi-open-wrap", children: [
     /* @__PURE__ */ jsx3(Styles, {}),
-    /* @__PURE__ */ jsxs2("button", { className: "hi-open-ide", onClick: () => void openIdeWindow(), title: "Open this chat in the Hermes IDE window (Ctrl+Alt+I)", children: [
+    /* @__PURE__ */ jsxs2("button", { className: "hi-open-ide", onClick: () => void newIdeWorkspace(), title: "New IDE workspace: a new chat in its own IDE window, in a folder you choose. Ctrl+Alt+I opens the chat on screen in the IDE.", children: [
       icon("code"),
       /* @__PURE__ */ jsx3("span", { children: "IDE" })
     ] }),
@@ -31374,10 +31424,10 @@ function IdeChatsMenu() {
         /* @__PURE__ */ jsx3("span", { className: "hi-chat-age", children: "Ctrl+Alt+I" })
       ] }),
       /* @__PURE__ */ jsxs2("button", { className: "hi-chat", onClick: () => {
-        setOpen(!1), startNewIdeChat();
+        setOpen(!1), newIdeWorkspace();
       }, children: [
         icon("add", 13),
-        /* @__PURE__ */ jsx3("span", { className: "hi-chat-title", children: "New IDE chat" })
+        /* @__PURE__ */ jsx3("span", { className: "hi-chat-title", children: "New IDE workspace" })
       ] })
     ] })
   ] });
@@ -31442,7 +31492,7 @@ function OpenCard({ attrs, sessionId }) {
 
 // src/plugin.tsx
 import { jsx as jsx4 } from "react/jsx-runtime";
-var PLUGIN_ID = "hermes-ide", plugin_default = {
+var PLUGIN_ID = "hermes-ide", WINDOWS_KEY = "ideWindows", plugin_default = {
   id: PLUGIN_ID,
   name: "Hermes IDE",
   // The element picker and page reload run a script in the app's Browser pane; the app asks the
@@ -31476,7 +31526,10 @@ var PLUGIN_ID = "hermes-ide", plugin_default = {
           data: { id: `${PLUGIN_ID}.${c2.id}`, label: c2.label, category: "view", defaults: c2.keys, run: c2.run }
         });
     };
-    if (ctx2.registerSettingsPage?.({ id: "settings", title: "Hermes IDE", icon: "code", render: () => /* @__PURE__ */ jsx4(SettingsPage, {}) }), ctx2.addEventListener(window, "storage", onStorageRequest), !IDE_WINDOW) {
+    if (ctx2.registerSettingsPage?.({ id: "settings", title: "Hermes IDE", icon: "code", render: () => /* @__PURE__ */ jsx4(SettingsPage, {}) }), ctx2.addEventListener(window, "storage", ((e) => {
+      let p = onStorageRequest(e);
+      p && handleOpenRequest(p);
+    })), !IDE_WINDOW) {
       ctx2.register({
         id: "row-badge",
         area: sdk.SESSION_ROW_AREAS?.leading ?? "sessionRow.leading",
@@ -31490,8 +31543,17 @@ var PLUGIN_ID = "hermes-ide", plugin_default = {
           keywords: ["ide", "editor", "cursor", "code", "popout", "window"]
         }
       ]), ctx2.onEvent(`plugin.${PLUGIN_ID}.open`, (ev) => {
-        let p = ev?.payload ?? {}, focused = host5.state.focusedStoredSessionId.get(), same = (a2, b) => !!b && (a2 === b || $sessionRows.get().some((r) => matches(r, a2) && matches(r, b)));
-        (p.path || p.url) && p.session_id && same(p.session_id, focused) && openIdeWindow({ path: p.path || void 0, line: Number(p.line) > 0 ? Number(p.line) : void 0, url: p.url || void 0, sid: p.session_id });
+        let p = ev?.payload ?? {};
+        if (!p.session_id) return;
+        let same = (a2, b) => a2 === b || $sessionRows.get().some((r) => matches(r, a2) && matches(r, b));
+        Object.entries(ctx2.storage.get(WINDOWS_KEY, {}) || {}).some(([id2, at]) => Date.now() - at < 9e4 && same(p.session_id, id2)) || openIdeWindow({
+          sid: p.session_id,
+          path: p.path || void 0,
+          line: Number(p.line) > 0 ? Number(p.line) : void 0,
+          url: p.url || void 0,
+          ui: !!p.ui,
+          req: p.request_id || void 0
+        });
       }), initIdeChats(), initSidebar(), ctx2.storage.get("welcomed-v3", !1) || (ctx2.storage.set("welcomed-v3", !0), notify(
         "info",
         "Press Ctrl+Alt+I, or click IDE in the status bar, to open this chat in its own IDE window. IDE chats get their own group in the sidebar.",
@@ -31534,20 +31596,32 @@ var PLUGIN_ID = "hermes-ide", plugin_default = {
     let sid = windowSessionId();
     ctx2.onEvent(`plugin.${PLUGIN_ID}.open`, (ev) => {
       let p = ev?.payload ?? {}, mine = [sid, host5.state.focusedStoredSessionId.get(), host5.state.focusedSessionId.get()];
-      p.session_id && !mine.includes(p.session_id) || (typeof p.path == "string" && p.path && openFile(p.path, { line: Number(p.line) > 0 ? Number(p.line) : void 0 }), typeof p.url == "string" && p.url && openInBrowser(p.url));
+      p.session_id && !mine.includes(p.session_id) || handleOpenRequest({
+        path: typeof p.path == "string" && p.path ? p.path : void 0,
+        line: Number(p.line) > 0 ? Number(p.line) : void 0,
+        url: typeof p.url == "string" && p.url ? p.url : void 0,
+        ui: !!p.ui,
+        req: p.request_id || void 0
+      });
     }), ctx2.register({
       id: "picked-elements",
       area: sdk.COMPOSER_AREAS?.middleware ?? "composer.middleware",
       data: { handler: (draft) => ({ ...draft, text: expandPicks(draft.text) }) }
     });
-    let beat = () => {
-      let ids = [sid, host5.state.focusedStoredSessionId.get(), host5.state.focusedSessionId.get()].filter(Boolean);
-      call("/ide/session", { ids }).catch(() => {
+    let myIds = () => [sid, host5.state.focusedStoredSessionId.get(), host5.state.focusedSessionId.get()].filter(Boolean), announce = (on) => {
+      let now = Date.now(), all = Object.fromEntries(Object.entries(ctx2.storage.get(WINDOWS_KEY, {}) || {}).filter(([, at]) => now - at < 9e4));
+      for (let id2 of myIds()) on ? all[id2] = now : delete all[id2];
+      ctx2.storage.set(WINDOWS_KEY, all);
+    }, beat = () => {
+      announce(!0), call("/ide/session", { ids: myIds() }).catch(() => {
       });
     };
     beat();
     let beatTimer = window.setInterval(beat, 6e4);
-    ctx2.onDispose(() => clearInterval(beatTimer)), ctx2.onDispose(host5.state.focusedStoredSessionId.listen(() => beat())), ctx2.onEvent("tool.complete", onToolComplete), ctx2.onEvent("message.complete", () => void applyPendingCwd()), ctx2.addEventListener(window, "focus", () => scheduleRefresh()), ctx2.addEventListener(window, "pagehide", saveLayout), ctx2.onDispose(host5.state.focusedStoredSessionId.subscribe((id2) => void switchSession(id2 || sid))), ctx2.onDispose(host5.state.cwd.subscribe(() => void syncRoot())), ctx2.onDispose(disposeTiles), initBrowser(), watchLayout(), setupIdeWindow();
+    ctx2.onDispose(() => clearInterval(beatTimer)), ctx2.addEventListener(window, "pagehide", () => announce(!1)), ctx2.onDispose(host5.state.focusedStoredSessionId.listen(() => beat())), ctx2.onEvent("tool.complete", onToolComplete), ctx2.onEvent("message.complete", () => void applyPendingCwd()), ctx2.addEventListener(window, "focus", () => scheduleRefresh()), ctx2.addEventListener(window, "pagehide", saveLayout), ctx2.onDispose(host5.state.focusedStoredSessionId.subscribe((id2) => void switchSession(id2 || sid))), ctx2.onDispose(host5.state.cwd.subscribe(() => void syncRoot())), ctx2.onDispose(disposeTiles), initBrowser(), watchLayout(), setupIdeWindow().then(() => {
+      let p = takePending();
+      p && handleOpenRequest(p);
+    });
   }
 };
 export {

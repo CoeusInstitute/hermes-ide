@@ -17,6 +17,7 @@ import logging
 import os
 import re
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -27,22 +28,48 @@ PLUGIN_ID = "hermes-ide"
 IDE_OPEN_SCHEMA: dict[str, Any] = {
     "name": "ide_open",
     "description": (
-        "Open a file in the Hermes IDE editor inside the Hermes Desktop app, optionally at a line, so the "
-        "user can see or edit it there. Use when the user asks to open, show or jump to a file or a line in "
-        "the IDE. Pass an absolute path or one relative to the session's working directory. A url (such as "
-        "the dev server you just started) is offered in the IDE's project UI view; to show a page in the "
-        "app's Browser pane directly, use desktop_preview (action open) instead."
+        "Drive the user's Hermes IDE window for this chat (the Hermes IDE plugin in Hermes Desktop), opening "
+        "the window when needed, and report what the IDE actually did. "
+        "ui: true runs the project's web UI: the IDE detects it in its folder (a package.json dev script that "
+        "runs Vite, Next.js, Nuxt, Remix, SvelteKit, Astro, Angular, CRA and similar, or an index.html), starts "
+        "the dev server with its own manager once the user has trusted the project, and shows the page in its "
+        "Browser. Use it whenever the user asks to open, run, start, show or preview the project's UI, app, site "
+        "or dev server in the IDE. Never start the dev server yourself (npm run dev in a terminal) for the IDE: it "
+        "duplicates the IDE's server and keeps the chat marked as working. "
+        "path (with line) shows a file in the IDE's editor. url shows a page that is already running. "
+        "Statuses: opened, running (with url), needs_trust (the IDE asks the user to allow the project; tell "
+        "them to click Always run or Run once in the IDE), starting, no_ui, no_folder, error. A relative path "
+        "is resolved against the session's working directory."
     ),
     "parameters": {
         "type": "object",
         "properties": {
+            "ui": {"type": "boolean", "description": "Run the project's web UI in the IDE and show it in the IDE's Browser."},
             "path": {"type": "string", "description": "File path (absolute, or relative to the working directory)."},
             "line": {"type": "integer", "description": "1-based line to reveal.", "minimum": 1},
-            "url": {"type": "string", "description": "http(s) URL to offer in the IDE, e.g. http://localhost:5173/."},
+            "url": {"type": "string", "description": "http(s) URL of a page that is already running, e.g. http://localhost:5173/."},
         },
         "additionalProperties": False,
     },
 }
+
+# How long the tool waits for the IDE window's answer. A UI start includes the user answering the
+# trust prompt and a dependency install, so it waits longer; it then reports the latest status.
+OPEN_WAIT = 15.0
+UI_WAIT = 55.0
+FINAL = {"opened", "running", "no_ui", "no_folder", "error"}
+
+
+def _data_dir() -> Path:
+    # The backend writes here too (dashboard/plugin_api.py): per profile, kept across updates.
+    try:
+        from plugins.plugin_storage import plugin_data_dir
+
+        return Path(plugin_data_dir(PLUGIN_ID))
+    except Exception:
+        d = Path(os.environ.get("HERMES_HOME") or Path.home() / ".hermes") / "plugin-data" / PLUGIN_ID
+        d.mkdir(parents=True, exist_ok=True)
+        return d
 
 
 def _resolve(path: str) -> str:
@@ -60,22 +87,40 @@ def _resolve(path: str) -> str:
     return os.path.realpath(p).replace("\\", "/")
 
 
+def _wait_for_answer(request_id: str, timeout: float) -> dict[str, Any] | None:
+    """The IDE window's answer (/ide/ack): the first final status, else the latest one at the deadline."""
+    f = _data_dir() / "acks" / f"{request_id}.json"
+    last = None
+    for _ in range(max(1, int(timeout / 0.4))):
+        try:
+            last = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            pass
+        if last and last.get("status") in FINAL:
+            break
+        time.sleep(0.4)
+    try:
+        f.unlink()
+    except OSError:
+        pass
+    return last
+
+
 def handle_ide_open(args: dict[str, Any], **kw: Any) -> str:
     raw = args.get("path")
     url = args.get("url")
-    payload: dict[str, Any] = {}
+    ui = args.get("ui") is True
+    payload: dict[str, Any] = {"ui": True} if ui else {}
     if isinstance(url, str) and url.strip():
         url = url.strip()
         if not url.lower().startswith(("http://", "https://")) or len(url) > 2048:
             return json.dumps({"success": False, "error": "url must be an http(s) URL"})
         payload["url"] = url
-    elif not isinstance(raw, str) or not raw.strip():
-        return json.dumps({"success": False, "error": "pass a path or a url"})
-    elif raw.strip().startswith(("\\\\", "//")):
-        # A network path would make the gateway open an SMB connection (and offer the user's
-        # credentials) to a host a prompt may have named.
-        return json.dumps({"success": False, "error": "network paths are not opened; use a local path"})
-    else:
+    elif isinstance(raw, str) and raw.strip():
+        if raw.strip().startswith(("\\\\", "//")):
+            # A network path would make the gateway open an SMB connection (and offer the user's
+            # credentials) to a host a prompt may have named.
+            return json.dumps({"success": False, "error": "network paths are not opened; use a local path"})
         path = _resolve(raw)
         if not os.path.isfile(path):
             return json.dumps({"success": False, "error": f"not a file: {path}"})
@@ -83,16 +128,30 @@ def handle_ide_open(args: dict[str, Any], **kw: Any) -> str:
         line = args.get("line")
         if isinstance(line, int) and line > 0:
             payload["line"] = line
+    elif not ui:
+        return json.dumps({"success": False, "error": "pass ui: true, a path, or a url"})
     if kw.get("session_id"):
         payload["session_id"] = str(kw["session_id"])
+    payload["request_id"] = uuid.uuid4().hex
     try:
         from hermes_cli.plugin_events import broadcast_plugin_event
 
         broadcast_plugin_event(PLUGIN_ID, "open", payload)
     except Exception as e:
         return json.dumps({"success": False, "error": f"could not reach Hermes Desktop: {e}"})
-    return json.dumps({"success": True, **payload,
-                       "note": "Opened in the Hermes IDE when a Desktop window with the IDE enabled is connected."})
+    wait = UI_WAIT if ui else OPEN_WAIT
+    answer = _wait_for_answer(payload["request_id"], wait)
+    if not answer:
+        return json.dumps({"success": False, "status": "no_window", "error": (
+            f"No Hermes IDE window answered within {int(wait)} s. Hermes Desktop must be open with the Hermes IDE "
+            "plugin turned on (Capabilities > Plugins > Desktop: Hermes IDE); after an update the gateway also needs a "
+            "restart. Tell the user; do not work around it with your own dev server or screen automation.")})
+    status = str(answer.get("status") or "")
+    result = {"success": status in ("opened", "running", "needs_trust", "starting"), "status": status,
+              "detail": str(answer.get("detail") or "")}
+    if answer.get("url"):
+        result["url"] = answer["url"]
+    return json.dumps(result)
 
 
 # ── IDE context for the model ─────────────────────────────────────────────────────────────────
@@ -100,12 +159,13 @@ def handle_ide_open(args: dict[str, Any], **kw: Any) -> str:
 IDE_NOTE = (
     "[Hermes IDE] This message was sent from the Hermes IDE window for this chat. Hermes IDE is a plugin in "
     "the user's own Hermes setup: beside this chat they see a file Explorer, a code editor and their "
-    "project's running web UI. A [[ Element picked in ... ]] block describes an element they picked in that "
-    "page (selector, markup, styles, the UI component and its source when known): treat it as the thing they "
-    "mean. @file: references are files or selections they added from the editor. To show them a file at a "
-    "line, call ide_open with a path; to put a page in front of them, ide_open with a url (or desktop_preview, action "
-    "open, for the app's Browser). Their edits save to disk "
-    "and your file edits appear in their editor with a review diff. For more, load the skill hermes-ide:guide."
+    "project's running web UI. To open, run or show the project's UI, call ide_open with ui: true (never "
+    "start a dev server yourself); to show a file at a line, ide_open with a path. ide_open reports what the "
+    "IDE did; if it says needs_trust, ask the user to click Always run or Run once in the IDE. A "
+    "[[ Element picked in ... ]] block describes an element they picked in that page (selector, markup, styles, "
+    "the UI component and its source when known): treat it as the thing they mean. @file: references are files "
+    "or selections from the editor. Your file edits appear in their editor with a review diff. For more, load "
+    "the skill hermes-ide:guide."
 )
 IDE_LEASE_SECONDS = 180
 _cache: dict[str, Any] = {"mtime": None, "data": {}}
@@ -113,12 +173,7 @@ _cache: dict[str, Any] = {"mtime": None, "data": {}}
 
 def _ide_sessions_path() -> Path:
     # Same place the backend writes (dashboard/plugin_api.py, /ide/session).
-    try:
-        from plugins.plugin_storage import plugin_data_dir
-
-        return Path(plugin_data_dir(PLUGIN_ID)) / "ide-sessions.json"
-    except Exception:
-        return Path(os.environ.get("HERMES_HOME") or Path.home() / ".hermes") / "plugin-data" / PLUGIN_ID / "ide-sessions.json"
+    return _data_dir() / "ide-sessions.json"
 
 
 def _open_ide_sessions(now: float | None = None) -> set[str]:

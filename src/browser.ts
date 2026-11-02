@@ -6,7 +6,7 @@
 
 import { atom, host } from '@hermes/plugin-sdk'
 
-import { $root, $runAttention, $runUiRequest, $settings, $view, call, ctx, isMissingBackend, notify, openInBrowser, openTile } from './core'
+import { $folderDialog, $root, $runAttention, $runUiRequest, $settings, $view, ackRequest, call, ctx, isMissingBackend, notify, openFile, openInBrowser, openTile, type Pending } from './core'
 import { expandPickTokens, fileRef, isInside, pathKey } from './util'
 
 export interface Candidate {
@@ -186,6 +186,63 @@ function track(s: Server) {
   }
   poll = window.setInterval(tick, 1500)
   void tick()
+}
+
+// ── requests from the agent (ide_open) and from a new workspace ──────────────────────────────
+
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+const live = (s: Server | null) => !!s && s.state !== 'exited'
+
+/** Do what this IDE window was asked, and answer the agent's ide_open call with what happened. */
+export async function handleOpenRequest(p: Pending) {
+  if (p.folder) $folderDialog.set('workspace')
+  if (p.path) {
+    const line = Number(p.line) > 0 ? Number(p.line) : undefined
+    const shown = await openFile(p.path, { line })
+    ackRequest(p.req, shown ? 'opened' : 'error', shown ? `Showing ${p.path}${line ? ` at line ${line}` : ''} in the IDE's editor.` : `The IDE could not open ${p.path}; it showed the user why.`)
+  }
+  if (p.url) {
+    openInBrowser(p.url)
+    ackRequest(p.req, 'opened', __CATALOG__ ? `Offered ${p.url} in the IDE's Run view; to show it in the app's Browser, call desktop_preview with action open and this url.` : `Showing ${p.url} in the IDE's Browser column.`, p.url)
+  }
+  if (p.ui) await runUiForAgent(p.req)
+  if (!p.path && !p.url && !p.ui) ackRequest(p.req, 'opened', "The chat's IDE window is open.")
+}
+
+/** "Open the project's UI": the IDE's own detection and dev-server manager, never a server the
+ *  agent starts (that would duplicate it and keep the chat marked working). An untrusted project
+ *  waits for the user's answer in the trust banner; the call reports each step. */
+async function runUiForAgent(req?: string) {
+  const say = (status: string, detail: string, url = '') => ackRequest(req, status, detail, url)
+  for (let i = 0; i < 25 && !$root.get(); i++) await sleep(200) // the folder syncs just after the window opens
+  const root = $root.get()
+  if (!root) return say('no_folder', 'The IDE has no folder open. Ask the user to choose one (IDE: Open Folder).')
+  await detectProject(true)
+  const c = selected()
+  if (!c) {
+    return say('no_ui', `No web UI was found in ${root}: no package.json dev script that runs a known framework's dev server (Vite, Next.js, Nuxt, Remix, SvelteKit, Astro, Angular, CRA and similar, at the root, one level down, or in apps/* or packages/*) and no index.html. Python web UIs are not detected.`)
+  }
+  const what = `${c.kind === 'static' ? 'static site' : `${c.framework} app`}${c.rel ? ` in ${c.rel}` : ''}`
+  openTile('browser')
+  if (!trusted().includes(trustKey(c))) {
+    $askTrust.set(c)
+    say('needs_trust', `Found a ${what} (${c.command}${c.run ? `: ${c.run}` : ''}). It runs the project's own code, so the IDE is asking the user to allow it (Always run for this project, or Run once) in its ${__CATALOG__ ? 'Run view' : 'Browser column'}; it starts when they do.`)
+  } else if (!live($server.get())) {
+    await startUi()
+  }
+  // Follow it until it is ready or exits (the user may answer the trust prompt meanwhile).
+  for (const until = Date.now() + 50_000; Date.now() < until; await sleep(1000)) {
+    const s = $server.get()
+    if (s?.id !== c.id) continue
+    if (s.state === 'ready' && s.url) {
+      return say('running', `The ${what} is running at ${s.url}${__CATALOG__ ? `. It is offered in the IDE's Run view; to show it in the app's Browser, call desktop_preview with action open and this url` : " and showing in the IDE's Browser column"}.`, s.url)
+    }
+    if (s.state === 'exited') {
+      return say('error', `The ${what}'s dev server exited${s.exit_code != null ? ` with code ${s.exit_code}` : ''}. Last output:\n${s.log.slice(-8).join('\n')}`)
+    }
+  }
+  const s = $server.get()
+  say(s?.id === c.id ? 'starting' : 'needs_trust', s?.id === c.id ? `The ${what} is still ${s.state}; the IDE shows it when it is ready.` : `Still waiting for the user to allow the ${what} in the IDE.`)
 }
 
 export function initBrowser() {

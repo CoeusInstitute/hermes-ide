@@ -3,7 +3,7 @@
 
 import { atom, host } from '@hermes/plugin-sdk'
 
-import { $ideChats, ctx, loadIdeChats, notify, openIdeWindow, setIdeChats } from './core'
+import { $ideChats, ctx, loadIdeChats, markIdeChat, notify, openIdeWindow, setIdeChats } from './core'
 
 export interface Row {
   id: string
@@ -20,7 +20,6 @@ export interface Row {
 
 /** Every session row the backend listed (newest first is not guaranteed; sort where shown). */
 export const $sessionRows = atom<Row[]>([])
-let known = new Set<string>()
 
 export const durable = (r: Row) => r._lineage_root_id || r.id
 export const matches = (r: Row, id: string) => r.id === id || r._lineage_root_id === id
@@ -48,7 +47,6 @@ export async function refreshRows() {
     return // backend restarting: keep what we have
   }
   const rows = $sessionRows.get()
-  known = new Set(rows.flatMap(r => [r.id, durable(r)]))
   // Key IDE chats by their durable id, the one the row badge sees and that survives compaction.
   loadIdeChats()
   const chats = $ideChats.get()
@@ -63,18 +61,31 @@ export async function refreshRows() {
   if (changed) setIdeChats(next)
 }
 
-let pendingNewSince = 0
+// Model-facing, never painted (the gateway's "hidden" seed): it also makes the gateway store the
+// session at once, so the new workspace has a window and a session-list row before any message.
+const WORKSPACE_SEED =
+  'This chat is a Hermes IDE workspace: the user works in its Hermes IDE window, with the project folder in an Explorer, ' +
+  "a code editor and the project's running web UI beside this chat. For how to work with the IDE, load the skill hermes-ide:guide."
 
-/** A new chat that opens in the IDE as soon as it exists (after its first message; a draft has no
- *  session yet). */
-export function startNewIdeChat() {
-  pendingNewSince = Date.now()
-  host.newChat(host.state.profile.get() || null)
-  notify('info', 'Send the first message; this chat then opens in the IDE.', 'Hermes IDE')
+/** A new IDE workspace: a new chat, its IDE window, and a prompt there to choose or create the
+ *  project folder. It is an IDE chat from the start. */
+export async function newIdeWorkspace() {
+  let sid: string | undefined
+  try {
+    const r: any = await host.request('session.create', { messages: [{ role: 'system', content: WORKSPACE_SEED, display_kind: 'hidden' }] })
+    sid = r?.stored_session_id || r?.session_id
+  } catch (e) {
+    notify('error', `Could not start a new IDE workspace: ${(e as Error).message}`, 'Hermes IDE')
+    return
+  }
+  if (!sid) return notify('error', 'Could not start a new IDE workspace: the gateway returned no session.', 'Hermes IDE')
+  markIdeChat(sid)
+  await openIdeWindow({ sid, folder: true })
+  void refreshRows()
 }
 
 /** Main window: keep the rows current (another window's change, a turn that retitles an IDE chat,
- *  focus) and finish a pending "new IDE chat". */
+ *  focus). */
 export function initIdeChats() {
   const onStorage = (e: StorageEvent) => {
     if (e.key === 'hermes.plugin.hermes-ide.ideChats') {
@@ -92,19 +103,11 @@ export function initIdeChats() {
     const rows = $sessionRows.get()
     if (!sid || Object.keys($ideChats.get()).some(id => id === sid || rows.some(r => matches(r, id) && matches(r, sid)))) void refreshRows()
   })
-  const offFocus = host.state.focusedStoredSessionId.subscribe((id: string | null) => {
-    // The new chat just got its session: a brand-new id, not one the list already had.
-    if (pendingNewSince && id && !known.has(id)) {
-      if (Date.now() - pendingNewSince < 30 * 60_000) void openIdeWindow({ sid: id })
-      pendingNewSince = 0
-    }
-  })
   void refreshRows()
   ctx.onDispose(() => {
     window.removeEventListener('storage', onStorage)
     window.removeEventListener('focus', onFocus)
     clearInterval(tick)
     offTurn?.()
-    offFocus()
   })
 }
