@@ -374,3 +374,41 @@ def test_start_refuses_unknown_candidates_and_reaps_unwatched_servers(client, tm
     finally:
         api.SERVERS.pop("k1", None)
 
+
+
+def test_ide_session_lease_drives_the_agent_note(client, tmp_path, monkeypatch):
+    sessions = tmp_path / "plugin-data" / "ide-sessions.json"
+    sessions.parent.mkdir(parents=True)
+    monkeypatch.setattr(api, "_ide_sessions_path", lambda: sessions)
+    assert post(client, "/ide/session", ids=["local-abc", "", 5, "x" * 300]).status_code == 200
+    assert post(client, "/ide/session", ids="nope").status_code == 400
+    data = json.loads(sessions.read_text())
+    assert list(data) == ["local-abc"]
+
+    agent = _load("hermes_ide_agent_half_note", ROOT / "__init__.py")
+    monkeypatch.setattr(agent, "_ide_sessions_path", lambda: sessions)
+    assert agent.on_pre_llm_call(session_id="local-abc", user_message="why is this red?") == {"context": agent.IDE_NOTE}
+    assert agent.on_pre_llm_call(session_id="other", user_message="hello") is None
+    # A picked element marks an IDE message even without a lease (the window just closed).
+    picked = "[[ Element picked in the IDE browser (http://localhost:5173/):\n- selector: `#x`\n]]"
+    assert agent.on_pre_llm_call(session_id="other", user_message=picked) == {"context": agent.IDE_NOTE}
+    # The lease runs out a few minutes after the window stops renewing it.
+    assert "local-abc" not in agent._open_ide_sessions(now=data["local-abc"] + agent.IDE_LEASE_SECONDS + 1)
+
+
+def test_agent_half_registers_the_tool_the_hook_and_the_skill():
+    agent = _load("hermes_ide_agent_half_reg", ROOT / "__init__.py")
+    calls = []
+
+    class Ctx:
+        def register_tool(self, **kw):
+            calls.append(("tool", kw["name"]))
+
+        def register_hook(self, name, fn):
+            calls.append(("hook", name))
+
+        def register_skill(self, name, path, description=""):
+            calls.append(("skill", name, path.read_text(encoding="utf-8").startswith("---\nname: guide"), description.startswith("Use when")))
+
+    agent.register(Ctx())
+    assert calls == [("tool", "ide_open"), ("hook", "pre_llm_call"), ("skill", "guide", True, True)]

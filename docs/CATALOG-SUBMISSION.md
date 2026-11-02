@@ -6,11 +6,11 @@ The catalog is a human-reviewed directory in [NousResearch/hermes-agent](https:/
 
 | Item | State |
 |---|---|
-| Catalog build passes `hermes plugins validate` | Yes (v0.4.0, `catalog` branch) |
+| Catalog build passes `hermes plugins validate` | Yes (v0.5.0, `catalog` branch) |
 | Desktop surface inside the SDK | Yes; one review warning, the window maximize (disclosed below) |
-| Security scan | `caution`, not `dangerous`: 35 `inline_shell_exec` hits, all inside CodeMirror's Lezer parse-table strings (see below) |
+| Security scan | `caution`, not `dangerous`: 35 `inline_shell_exec` hits, all inside CodeMirror's Lezer parse-table strings, and one `dump_all_env` hit on the credential-refusal pattern (see below) |
 | No private core imports, no core overrides | Yes |
-| Capabilities declared match registrations | Yes (`ide_open`) |
+| Capabilities declared match registrations | Yes (`ide_open`; hook `pre_llm_call`; skill `hermes-ide:guide`) |
 | `requires_hermes` truthful and declared in `plugin.yaml` | `>=0.22.5`, the version both builds were verified on |
 | README with disclosures, screenshots | Yes |
 | CI on the repo | `.github/workflows/ci.yml` (tests and reproducible bundles) |
@@ -41,6 +41,7 @@ The catalog is a human-reviewed directory in [NousResearch/hermes-agent](https:/
 Validation passed.
 ```
 
+- **`dump_all_env` caution (`dashboard/plugin_api.py:51`).** The line is `SECRET_RE`, the pattern the backend uses to *refuse* credential files (`.env`, `auth.json`, tokens, secrets, passwords); the scanner matches its words. Nothing reads or dumps the environment; dev servers get the gateway's environment *minus* anything credential-like (see the README's security section).
 - **`inline_shell_exec` cautions.** The scanner's pattern is the skill-markdown inline-shell syntax (`` !`…` ``). Every hit is inside a Lezer grammar table that CodeMirror's language packages ship as compressed strings (`stateData`, `goto`, `tokenData`, `states`); none is code. They appeared in 0.4 because the editor is now bundled as readable code instead of a minified `srcdoc` string. They were left as they are rather than rewritten to quiet the scanner.
 - **The raw bridge call.** `window.hermesDesktop.windowControls.toggleMaximize()`, once per IDE window, in `maximizeOnce()` in `src/core.ts`. The app opens pop-outs at 420 px, which an IDE cannot use, and the SDK has no window verb. Hook request 4 below.
 
@@ -48,22 +49,23 @@ Validation passed.
 
 > **Add hermes-ide: a Cursor-style IDE for Hermes Desktop**
 >
-> Hermes IDE turns any chat into its own IDE window: the app's single-session pop-out, claimed by the plugin, with an Explorer (files, search, git status), a tabbed CodeMirror 6 editor and Quick Open beside the real session chat. The editor is wired to the session: Ctrl+L adds a selection as an `@file:` reference, Ctrl+K sends an inline edit request, and agent edits to open files come back as an inline diff with Keep and Undo. It finds the project's web UI (Node frameworks by their dev script, or a static site), asks the user before running it, runs the dev server on the agent's machine, and opens the page in the app's Browser, where an element picker sends the picked element and its likely source lines to the chat.
+> Hermes IDE turns any chat into its own IDE window: the app's single-session pop-out, claimed by the plugin, with an Explorer (files, search, git status), a tabbed CodeMirror 6 editor and Quick Open beside the real session chat. The editor is wired to the session: Ctrl+L adds a selection as an `@file:` reference, Ctrl+K sends an inline edit request, and agent edits to open files come back as an inline diff with Keep and Undo. It finds the project's web UI (Node frameworks by their dev script, or a static site), asks the user before running it, runs the dev server on the agent's machine, and opens the page in the app's Browser, where an element picker sends the picked element (selector, markup, styles, its React, Vue or Svelte component and source line) to the chat as a compact composer token. While a chat's IDE window is open, a `pre_llm_call` note tells the agent the message comes from the IDE, and a bundled skill (`hermes-ide:guide`) explains the IDE.
 >
-> **Hermes surfaces used.** Desktop SDK: `host.openSession` (`intent: 'window'`), `host.openWorkspace` tiles with `dock`, `host.paneVisibility`, `ctx.runAction` (`view.toggleSidebar`, `view.showBrowser`, `nav.commandPalette`), `ctx.preview.executeJavaScript` (declared capability), `host.composer` (`getDraft`, `insertText`, `focus`), `host.listPersistedSessions`, `host.newChat`, `host.notify`, `ctx.os` (`openExternal`, `writeClipboard`), `ctx.storage`, `ctx.rest`, `SESSION_ROW_AREAS.leading`, `STATUSBAR_AREAS.right`, `TITLEBAR_AREAS.right`, `PALETTE_AREA`, `KEYBINDS_AREA`, `TRANSCRIPT_DIRECTIVE_AREA`, `ctx.registerSettingsPage`, SDK components (`MessageTextContent`, `Popover`, `ConfirmDialog`, `Dialog`, `ContextMenu`, `Button`, `Codicon`, `ToggleRow`, `SegmentedControl`). Backend: a dashboard plugin router at `/api/plugins/hermes-ide/`. Agent: `ctx.register_tool` (`ide_open`), `hermes_cli.plugin_events.broadcast_plugin_event`, `agent.runtime_cwd.resolve_agent_cwd`.
+> **Hermes surfaces used.** Desktop SDK: `host.openSession` (`intent: 'window'`), `host.openWorkspace` tiles with `dock`, `host.paneVisibility`, `ctx.runAction` (`view.toggleSidebar`, `view.showBrowser`, `nav.commandPalette`), `ctx.preview.executeJavaScript` (declared capability), `host.composer` (`getDraft`, `insertText`, `focus`), `COMPOSER_AREAS.middleware` (expands picked-element tokens at send), `host.listPersistedSessions`, `host.newChat`, `host.notify`, `ctx.os` (`openExternal`, `writeClipboard`), `ctx.storage`, `ctx.rest`, `SESSION_ROW_AREAS.leading`, `STATUSBAR_AREAS.right`, `TITLEBAR_AREAS.right`, `PALETTE_AREA`, `KEYBINDS_AREA`, `TRANSCRIPT_DIRECTIVE_AREA`, `ctx.registerSettingsPage`, SDK components (`MessageTextContent`, `Popover`, `ConfirmDialog`, `Dialog`, `ContextMenu`, `Button`, `Codicon`, `ToggleRow`, `SegmentedControl`). Backend: a dashboard plugin router at `/api/plugins/hermes-ide/`. Agent: `ctx.register_tool` (`ide_open`), `ctx.register_hook` (`pre_llm_call`), `ctx.register_skill` (`guide`), `plugins.plugin_storage.plugin_data_dir`, `hermes_cli.plugin_events.broadcast_plugin_event`, `agent.runtime_cwd.resolve_agent_cwd`.
 >
 > **Disclosures (rule 13).**
 > - Reads and writes files in folders the user opens, on the agent's machine, through its own routes behind the gateway's authentication. Refuses Hermes credential files in every home and profile under any path spelling, and never lists or searches them.
 > - Runs shell commands: `git status` / `git show` (read-only, optional locks off), `rg`, and, only for projects the user trusted, the project's package manager (`install`, the dev script).
 > - Long-running background processes: those dev servers, in their own process group, stopped two minutes after the last IDE window that asked about them closes, and at gateway exit. They get the gateway's environment minus credential-looking variables. Static sites run on a bundled server bound to 127.0.0.1 that refuses dotfiles, folder listings and non-localhost Host headers.
 > - Runs a page script (element picker, reload) only through `ctx.preview`, on origins the user allowed in the app's prompt.
+> - Adds context to the model: a `pre_llm_call` hook appends a fixed note (about 800 characters, no user data) to the current turn of a chat whose IDE window is open, or whose message carries a picked element. Not persisted, system prompt untouched. The open windows are known from a lease file, `plugin-data/hermes-ide/ide-sessions.json` (chat ids and timestamps only).
 > - No network calls to third parties, no stored credentials, no telemetry.
 > - One raw bridge call: `windowControls.toggleMaximize` once per IDE window (no SDK window verb; the pop-out opens at 420 px).
-> - The security scan's `inline_shell_exec` cautions are CodeMirror Lezer parse-table strings.
+> - The security scan's `inline_shell_exec` cautions are CodeMirror Lezer parse-table strings; its `dump_all_env` caution is the credential-refusal pattern itself.
 >
 > **Builds.** The pinned commit is the `catalog` branch's catalog build. The repository's `main` also has a full build with features that need the app's markup (a session-list group, column sizing, an own Browser webview); it is not part of this entry, lives in `src/full/`, and is tree-shaken from this bundle. Hook requests for those features are linked below.
 >
-> Screenshots attached. Verified on Hermes 0.22.5 in a sandboxed Desktop over CDP (details in `docs/FEATURES.md`, Gate 0.4).
+> Screenshots attached. Verified on Hermes 0.22.5 in a sandboxed Desktop over CDP (details in `docs/FEATURES.md`, Gates 0.4 and 0.5).
 
 ## Hook requests (drafts for NousResearch/hermes-agent issues)
 
@@ -87,7 +89,7 @@ Each one would let a full-build feature move into the catalog build. The admissi
 
 ### 3. Opening an address in the Browser pane
 
-**Need.** A plugin that starts a dev server wants its page in the app's Browser. `ctx.preview.executeJavaScript` can script an open page, but nothing opens one; the `preview.open` event is emitted only by the agent's `open_preview` tool.
+**Need.** A plugin that starts a dev server wants its page in the app's Browser. `ctx.preview.executeJavaScript` can script an open page, but nothing opens one; the `preview.open` event is emitted only by the agent's `desktop_preview` tool (action `open`).
 
 **Proposal.** `ctx.preview.open(url, { label? })` through the same normalizer and `reachablePreviewUrl` the `preview.open` event uses, scoped to the focused session's window, http(s) and localhost only (no consent needed to show a page; scripts stay consent-gated).
 

@@ -341,7 +341,8 @@ export function writePerChat(key: string, value: unknown) {
 
 function savedTiles(): TileId[] {
   const v = readPerChat<TileId[]>('tiles')
-  return Array.isArray(v) ? TILE_IDS.filter(id => v.includes(id)) : ['explorer', 'editor']
+  // A first IDE window opens the Explorer only: the Editor opens with the first file.
+  return Array.isArray(v) ? TILE_IDS.filter(id => v.includes(id)) : ['explorer']
 }
 
 export function noteTiles() {
@@ -782,8 +783,15 @@ export async function canonical(path: string): Promise<string | null> {
 }
 
 export async function syncRoot() {
-  const picked = ctx.storage.get(`root:${sessionKey}`, null) as string | null
+  let picked = ctx.storage.get(`root:${sessionKey}`, null) as string | null
   const cwd = normPath(host.state.cwd.get() || '')
+  // A folder the chat was moved to stays pinned until the session reports it; then the IDE follows
+  // the chat again. (The app's cwd store can lag the move, or not update in this window at all:
+  // following it at once put the Explorer straight back in the old folder.)
+  if (picked && cwd && pathKey(cwd) === pathKey(picked)) {
+    ctx.storage.remove(`root:${sessionKey}`)
+    picked = null
+  }
   const target = picked || ($settings.get().followSession ? cwd : $root.get() || cwd)
   $rootPicked.set(!!picked)
   if (!target) {
@@ -812,9 +820,8 @@ export async function setRoot(path: string, applyToSession: boolean) {
   const sid = host.state.focusedSessionId.get()
   if (applyToSession && sid) {
     try {
+      // The session owns the folder now; the pin is dropped once it reports it (syncRoot).
       await host.request('session.cwd.set', { session_id: sid, cwd: root })
-      ctx.storage.remove(`root:${sessionKey}`) // the session now owns it; keep following
-      $rootPicked.set(false)
     } catch (e) {
       notify('warning', `The IDE opened ${baseName(root)}, but the chat stays in its folder: ${(e as Error).message}`)
     }
@@ -949,8 +956,6 @@ export async function applyPendingCwd() {
   try {
     await host.request('session.cwd.set', { session_id: sid, cwd: p.cwd })
     pendingCwd = null
-    ctx.storage.remove(`root:${p.stored}`)
-    $rootPicked.set(false)
     notify('info', `This chat now works in ${baseName(p.cwd)}.`)
   } catch {
     /* still busy: the next message.complete retries */
@@ -1041,7 +1046,7 @@ export function showIde() {
     void openIdeWindow()
     return
   }
-  for (const id of savedTiles().length ? savedTiles() : (['explorer', 'editor'] as TileId[])) openTile(id)
+  for (const id of savedTiles().length ? savedTiles() : (['explorer'] as TileId[])) openTile(id)
   // Tabs restored from a previous launch load lazily; bring the active one up now.
   const tabs = $tabs.get()
   const want = $active.get() ?? tabs[0]?.path
@@ -1247,6 +1252,9 @@ export function saveLayout() {
 /** Rebuild the saved arrangement: open each tile docked against its already placed neighbour. */
 async function restoreLayout() {
   let tiles = savedTiles()
+  // No editor without something to edit: it opens with the first file. (The catalog build keeps
+  // its Editor tile, which holds the Explorer panel.)
+  if (!__CATALOG__ && !$tabs.get().length) tiles = tiles.filter(id => id !== 'editor')
   if (__CATALOG__) {
     // The Explorer panel lives in the Editor column: showing it means showing that column.
     $explorerPanel.set(tiles.includes('explorer'))
@@ -1334,11 +1342,17 @@ export async function setupIdeWindow() {
   markIdeChat(windowSessionId())
   maximizeOnce()
   if (!__CATALOG__) fullWindowSetup()
+  // Take the final width and drop the session list BEFORE the columns dock: tiles docked into a
+  // 420 px window are stretched by the maximize, and the user would watch a half-window Explorer
+  // until the fit lands.
+  await maximized()
+  await sizeSettled()
+  await hideSessionList()
   await restoreLayout()
   // The chat's tabs were restored before the editor tile existed; load the active one now.
   const want = $active.get() ?? $tabs.get()[0]?.path
   if (want && !meta.has(pathKey(want)) && closers.has('editor')) activate(want)
-  // A file or page the window was opened for shows now, not after the window has settled.
+  // A file or page the window was opened for shows now.
   const pending = sessionStorage.getItem(PENDING_OPEN)
   if (pending) {
     sessionStorage.removeItem(PENDING_OPEN)
@@ -1354,9 +1368,6 @@ export async function setupIdeWindow() {
       /* malformed request: ignore */
     }
   }
-  await maximized()
-  await sizeSettled()
-  await hideSessionList()
   if (!__CATALOG__) {
     await frames(2)
     await fitColumns()

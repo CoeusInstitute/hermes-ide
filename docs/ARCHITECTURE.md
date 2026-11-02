@@ -109,6 +109,14 @@ A static site runs on `dashboard/static_server.py`: `127.0.0.1`, no dotfiles or 
 
 The element picker is one self-contained script: it highlights the element under the pointer, swallows the click and resolves with the element's selector, size, text, markup and key computed styles. The catalog build runs it with `ctx.preview.executeJavaScript` in the app's Browser pane (the app asks the user once per origin and guards the origin in the page); the full build runs it in its own `<webview>`. Esc, the button again, or two minutes end a pick. The plugin then searches the project (id, then visible text, then the most specific class) for up to three source lines and inserts the description into the chat composer, with the lines as `@file:` references.
 
+## Element picking and what the agent sees
+
+`browser.ts` sends one self-contained script (`PICKER`) into the page: the full build's own `<webview>` with `executeJavaScript`, the catalog build's app Browser through `ctx.preview.executeJavaScript` (a declared capability; the app asks once per origin). The script highlights the element under the pointer (through open shadow roots, following scroll and resize) and resolves with its description on click, or `null` on Esc, a right-click or `window.__hermesIdePick(null)`, which is how the pick button cancels. A second pick ends the first. In a development build it reads the rendering component: React fibers (the element's own `_debugSource` is the exact JSX line; React 19 dropped it), Vue's `__file`, Svelte's `__svelte_meta`.
+
+`sendPicked` turns that into a `[[ Element picked in … ]]` block (`pickBlock`), checks a component file exists on the agent's machine (`/fs/stat`) or falls back to searching the project, and stores the block in the window's `sessionStorage` under a number. The composer only gets a one-line token, `[[ element N · <tag> "text" ]]`. The IDE window's `COMPOSER_AREAS.middleware` contribution replaces each known token with its block when the message is sent (`expandPickTokens` in `util.ts`), so the model reads the full description and the input stays short.
+
+The agent half knows which chats have an IDE window open: the window posts its chat's ids to `/ide/session` every minute, and the backend keeps them with a timestamp in `plugin-data/hermes-ide/ide-sessions.json` (`plugin_data_dir`, per profile). The `pre_llm_call` hook in `__init__.py` returns a fixed note for a turn whose session id renewed its lease in the last three minutes, or whose message carries a picked element. Hermes appends it to that turn's user message only; nothing is stored and the system prompt (and its cache) is untouched. The note points to the bundled skill `hermes-ide:guide` (`skills/guide/SKILL.md`), registered with its description so it shows in the agent's skill index.
+
 ## Backend API
 
 All routes are `POST` with a JSON body under `/api/plugins/hermes-ide/`. Paths travel in the body, never the URL. All routes are plain `def`, so FastAPI runs them in its threadpool and a slow `git` or `rg` call never stalls the gateway event loop. OS refusals and timeouts come back as readable `4xx`/`504` errors.
@@ -116,6 +124,7 @@ All routes are `POST` with a JSON body under `/api/plugins/hermes-ide/`. Paths t
 | Route | Body | Returns |
 |---|---|---|
 | `/health` | | version, `rg` and `git` availability, platform |
+| `/ide/session` | `ids` (up to 8 chat ids) | renews the IDE-window lease the agent half's `pre_llm_call` hook reads |
 | `/fs/list` | `path`, `show_hidden` | entries (folders first, sorted before the 5,000 cap), `truncated` |
 | `/fs/read` | `path` | `text`, `mtime` (ns), `size`, `bom`, or `binary` / `too_large` (over 5 MB); regular files only |
 | `/fs/stat` | `path` | `exists`, `dir`, `mtime`, canonical `path` |

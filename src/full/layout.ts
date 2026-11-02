@@ -91,8 +91,12 @@ function captureLayout(): Layout | null {
 
 let lastSaved = ''
 
+// True once a fit has really run in this window. Until then the columns are the app's even split,
+// and recording them would save a quarter-window Explorer as the user's chosen width (it stuck).
+let fittedOnce = false
+
 export function fullSaveLayout() {
-  if (!IDE_WINDOW || !layoutState.ready || layoutState.fitting) return
+  if (!IDE_WINDOW || !layoutState.ready || layoutState.fitting || !fittedOnce) return
   const layout = captureLayout()
   if (!layout) return
   const prev = savedLayout()
@@ -125,6 +129,7 @@ export async function fitColumns(): Promise<void> {
   layoutState.fitting = true
   try {
     await frames(3)
+    fittedOnce = true
     const W = window.innerWidth
     const saved = savedLayout().widths
     const measure = () => readColumns()

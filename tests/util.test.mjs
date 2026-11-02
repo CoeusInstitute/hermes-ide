@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { addressToUrl, columnPlan, columnWidths, DEFAULT_LAYOUT, detectEol, dockPlan, fileRef, fuzzyScore, isInside, normalizeLayout, pathOrUrl, pathsFromToolArgs, rankFiles, relPath, splitLineSuffix } from '../src/util.ts'
+import { addressToUrl, columnPlan, columnWidths, DEFAULT_LAYOUT, detectEol, dockPlan, expandPickTokens, fileRef, fuzzyScore, isInside, normalizeLayout, pathOrUrl, pathsFromToolArgs, rankFiles, relPath, splitLineSuffix } from '../src/util.ts'
 
 test('fileRef emits the @file syntax Hermes expands, relative to the workspace', () => {
   assert.equal(fileRef('D:/proj/src/app.ts', 'D:/proj'), '@file:src/app.ts')
@@ -44,7 +44,7 @@ test('tool arguments yield the files an agent turn may have written', () => {
 test('columnPlan sizes Explorer, chat and preview to the window, within usable clamps', () => {
   assert.deepEqual(columnPlan(1920), { explorer: 269, chat: 576, preview: 614 })
   assert.deepEqual(columnPlan(1280), { explorer: 220, chat: 384, preview: 520 })
-  assert.deepEqual(columnPlan(3840), { explorer: 340, chat: 760, preview: 1229 })
+  assert.deepEqual(columnPlan(3840), { explorer: 300, chat: 760, preview: 1229 })
   assert.deepEqual(columnPlan(900), { explorer: 220, chat: 380, preview: 520 })
 })
 
@@ -83,7 +83,7 @@ test('normalizeLayout tolerates junk and places tiles the saved layout never saw
 })
 
 test('columnWidths: plan by default, saved fractions win, the editor takes the rest', () => {
-  assert.deepEqual(columnWidths(['explorer', 'editor', 'browser', 'chat'], 3840), [340, null, 1229, 760])
+  assert.deepEqual(columnWidths(['explorer', 'editor', 'browser', 'chat'], 3840), [300, null, 1229, 760])
   assert.deepEqual(columnWidths(['explorer', 'editor', 'chat'], 3840, { explorer: 0.1, chat: 2 }), [384, null, 760])
   // A zone the IDE does not own gets the Browser column's room (it used to keep its own width).
   assert.deepEqual(columnWidths(['explorer', 'chat', null], 1920), [269, null, 614])
@@ -116,6 +116,37 @@ test('detectEol takes the dominant line ending, not the first CRLF it sees', () 
 
 test('columnWidths: a zone the IDE does not own shares the Browser column room', () => {
   const w = columnWidths(['explorer', 'editor', 'browser', 'chat', null], 3840)
-  assert.deepEqual(w, [340, null, 615, 760, 615])
+  assert.deepEqual(w, [300, null, 615, 760, 615])
   assert.deepEqual(columnWidths(['editor', 'chat', null], 3840), [null, 760, 1229])
+})
+
+test('columnWidths: without the editor the page takes the rest, a little wider than the chat', () => {
+  const w = columnWidths(['explorer', 'browser', 'chat'], 3840)
+  assert.deepEqual(w, [300, null, 1664])
+  const browser = 3840 - 300 - 1664
+  assert.ok(browser > 1664 && browser < 1664 * 1.2, `browser ${browser} vs chat 1664`)
+})
+
+test('columnWidths: an Explorer width saved before any fit (a quarter of the window) is ignored', () => {
+  assert.deepEqual(columnWidths(['explorer', 'editor', 'chat'], 3840, { explorer: 0.25 }), [300, null, 760])
+  assert.deepEqual(columnWidths(['explorer', 'editor', 'chat'], 3840, { explorer: 0.09 }), [346, null, 760])
+})
+
+test('picked-element tokens expand to their [[ ]] blocks when the message is sent', () => {
+  const blocks = { 3: '[[ Element picked in the IDE browser (http://localhost:5173/):\n- selector: `#Times`\n]]' }
+  const sent = expandPickTokens('Make [[ element 3 · <span#Times> "0:00 / 0:00" ]] bold', blocks)
+  assert.equal(sent, 'Make \n[[ Element picked in the IDE browser (http://localhost:5173/):\n- selector: `#Times`\n]]\n bold')
+  // Unknown tokens (another window's, or after a reload of storage) stay as typed; other text is untouched.
+  assert.equal(expandPickTokens('[[ element 9 · <a> ]]', blocks), '[[ element 9 · <a> ]]')
+  assert.equal(expandPickTokens('no tokens [[ here ]]', blocks), 'no tokens [[ here ]]')
+  // Two picks in one message.
+  const two = expandPickTokens('[[ element 3 · <span> ]] and [[ element 3 · <span> ]]', blocks)
+  assert.equal(two.split('[[ Element picked').length - 1, 2)
+})
+
+test('columnWidths: an app pane docked beside them does not leave the chat wider than the page', () => {
+  const w = columnWidths(['explorer', 'browser', 'chat', null], 3840)
+  const browser = 3840 - w.reduce((a, b) => a + (b ?? 0), 0)
+  assert.equal(w[3], 615)
+  assert.ok(browser > w[2], `browser ${browser} vs chat ${w[2]}`)
 })

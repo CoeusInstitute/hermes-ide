@@ -2,6 +2,32 @@
 
 All notable changes to Hermes IDE. Versions follow the `version` in `plugin.yaml`.
 
+## 0.5.0 (2026-11-02)
+
+### Element picker
+
+- Picked elements wait in the composer as one-line tokens (`[[ element 3 · <button.cta-button> "Mark all done" ]]`); composer middleware swaps each for its full description when the message is sent, so the input stays short. Tokens survive a window reload.
+- The description is sectioned with `[[ … ]]` so the model sees where each element starts and ends. The page address is a plain link: an `@url:` reference would fetch the whole page into every message, and Hermes refuses `localhost` pages.
+- React (up to 18), Vue and Svelte development builds: the component chain and the exact source line that rendered the element. Otherwise the project search as before.
+- Selectors prefer test ids and unique ids and grow until they match one element; shadow-DOM picks name the host (`host >>> inner`); key attributes (role, aria-label, href, src, alt, name, type, placeholder, title) are listed; long markup is shortened to its opening tag.
+- Cancelling goes through the picker's own handle instead of a synthetic Escape key, so the pick button (pressed while picking), Esc and a right-click all end it cleanly; one pick at a time; the highlight follows scrolling and resizing.
+
+### Your agent knows about the IDE
+
+- A `pre_llm_call` hook adds a short [Hermes IDE] note to each turn of a chat whose IDE window is open (a lease the window renews every minute in `plugin-data/hermes-ide/ide-sessions.json`), or that carries a picked element.
+- A bundled skill, `hermes-ide:guide`, listed in the agent's skill index while the plugin is enabled.
+- `ide_open`'s description pointed agents at `open_preview`, a tool this Hermes no longer has; it now names `desktop_preview` (action `open`).
+
+### Layout (full build)
+
+- The IDE window opens with the Explorer only (300 px at most); the Editor opens with the first file.
+- With the page open and no editor, the page takes the rest of the window and the chat 47% of it, so the page is a little wider than the chat.
+- The window maximizes and drops the session list before its columns dock, so the Explorer no longer shows at half the window until the fit lands; and a fit deferred while the window was hidden no longer saves the app's even split as your Explorer width (the cause of an Explorer stuck wide).
+
+### Fixes
+
+- Open Folder with **Also move this chat's working directory** (the default) put the Explorer straight back in the old folder, because the app's cwd store lags the move. The IDE now keeps the new folder until the chat reports it.
+
 ## 0.4.0 (2026-11-02)
 
 Catalog-ready, reviewed and hardened. One source now builds two ways: a **catalog build** that stays inside the Desktop plugin SDK and passes `hermes plugins validate`, and a **full build** (on `main`) that adds the features the SDK has no hook for yet.

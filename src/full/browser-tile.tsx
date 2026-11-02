@@ -122,7 +122,7 @@ export function FullBrowserTile() {
           onChange={e => setInput(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter') go(input); e.stopPropagation() }}
         />
-        <button className="hi-btn" data-on={picking} title="Pick an element and send it to the chat" disabled={!url} onClick={() => void pickElement(guest())}>{icon('inspect')}</button>
+        <button className="hi-btn" data-on={picking} aria-pressed={picking} title={picking ? 'Cancel the pick' : 'Pick an element and send it to the chat'} disabled={!url && !picking} onClick={() => void pickElement(guest())}>{icon('inspect')}</button>
         <button className="hi-btn" title="Page DevTools" disabled={!url} onClick={() => guest()?.openDevTools()}>{icon('debug-console')}</button>
         <button className="hi-btn" title="Open in your browser" disabled={!url} onClick={() => void ctx.os.openExternal?.(url)}>{icon('link-external')}</button>
       </div>
