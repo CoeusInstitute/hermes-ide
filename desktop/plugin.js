@@ -1359,11 +1359,10 @@ async function refreshRows() {
   }
   changed && setIdeChats(next);
 }
-var WORKSPACE_SEED = "This chat is a Hermes IDE workspace: the user works in its Hermes IDE window, with the project folder in an Explorer, a code editor and the project's running web UI beside this chat. For how to work with the IDE, load the skill hermes-ide:guide.";
 async function newIdeWorkspace() {
   let sid;
   try {
-    let r = await host3.request("session.create", { messages: [{ role: "system", content: WORKSPACE_SEED, display_kind: "hidden" }] });
+    let r = await host3.request("session.create", { title: `New IDE workspace ${(/* @__PURE__ */ new Date()).toLocaleTimeString()}` });
     sid = r?.stored_session_id || r?.session_id;
   } catch (e) {
     notify("error", `Could not start a new IDE workspace: ${e.message}`, "Hermes IDE");
@@ -31313,7 +31312,7 @@ function QuickOpen() {
   ] }) });
 }
 function FolderDialog() {
-  let open = useValue2($folderDialog), root = useValue2($root), workspace = open === "workspace", [path, setPath] = useState2(""), [apply, setApply] = useState2(!0);
+  let open = useValue2($folderDialog), root = useValue2($root), workspace = open === "workspace", runtimeSid = useValue2(host4.state.focusedSessionId), [path, setPath] = useState2(""), [apply, setApply] = useState2(!0);
   useEffect2(() => {
     open && setPath(workspace ? "" : root || "");
   }, [open]);
@@ -31350,7 +31349,7 @@ function FolderDialog() {
         /* @__PURE__ */ jsx3("input", { type: "checkbox", checked: apply, onChange: (e) => setApply(e.target.checked), style: { height: "auto" } }),
         "Also move this chat's working directory here, so Hermes works in the same folder"
       ] }),
-      host4.state.focusedSessionId.get() ? null : /* @__PURE__ */ jsx3("div", { style: { fontSize: 12, color: "var(--ui-text-tertiary)" }, children: "This chat has not started yet. The folder is applied when its first reply finishes; to start a chat directly in a folder, use the composer's folder button." }),
+      !runtimeSid && !workspace ? /* @__PURE__ */ jsx3("div", { style: { fontSize: 12, color: "var(--ui-text-tertiary)" }, children: "This chat has not started yet. The folder is applied when its first reply finishes; to start a chat directly in a folder, use the composer's folder button." }) : null,
       /* @__PURE__ */ jsxs2("div", { style: { display: "flex", gap: 6, justifyContent: "flex-end" }, children: [
         useValue2($rootPicked) && !workspace ? /* @__PURE__ */ jsx3(Button2, { variant: "ghost", onClick: () => {
           followSession(), $folderDialog.set(!1);

@@ -1340,6 +1340,7 @@ function FolderDialog() {
   const open = useValue($folderDialog)
   const root = useValue($root)
   const workspace = open === 'workspace'
+  const runtimeSid = useValue(host.state.focusedSessionId) // arrives a moment after a new window opens
   const [path, setPath] = useState('')
   const [apply, setApply] = useState(true)
   useEffect(() => {
@@ -1396,7 +1397,7 @@ function FolderDialog() {
               Also move this chat's working directory here, so Hermes works in the same folder
             </label>
           )}
-          {!host.state.focusedSessionId.get() ? (
+          {!runtimeSid && !workspace ? (
             <div style={{ fontSize: 12, color: 'var(--ui-text-tertiary)' }}>
               This chat has not started yet. The folder is applied when its first reply finishes; to start a chat directly in a folder, use the composer's folder button.
             </div>

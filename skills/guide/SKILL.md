@@ -68,4 +68,4 @@ Each `[[ ... ]]` block is one element, between the opening `[[` and the closing 
 - `desktop_preview` (Hermes' own tool) with `action: "open"` and a `url` shows a page in the app's Browser pane. In the catalog build of the IDE, a `running` answer says to use it to show the page.
 - The IDE reaches files on the agent's machine through its own routes; it refuses Hermes credential files (`.env`, `auth.json`, token files) on every route.
 - Two builds exist: the catalog build (the page opens in the app's Browser pane; the Explorer is a panel beside the editor) and the full build (the IDE has its own Browser column). The user's messages are the same in both.
-- The "[Hermes IDE]" note appears while the IDE window for this chat is open, or when a message carries a picked element. A chat started as a new IDE workspace also carries a hidden note saying so.
+- The "[Hermes IDE]" note appears while the IDE window for this chat is open, or when a message carries a picked element.

@@ -61,18 +61,15 @@ export async function refreshRows() {
   if (changed) setIdeChats(next)
 }
 
-// Model-facing, never painted (the gateway's "hidden" seed): it also makes the gateway store the
-// session at once, so the new workspace has a window and a session-list row before any message.
-const WORKSPACE_SEED =
-  'This chat is a Hermes IDE workspace: the user works in its Hermes IDE window, with the project folder in an Explorer, ' +
-  "a code editor and the project's running web UI beside this chat. For how to work with the IDE, load the skill hermes-ide:guide."
-
 /** A new IDE workspace: a new chat, its IDE window, and a prompt there to choose or create the
  *  project folder. It is an IDE chat from the start. */
 export async function newIdeWorkspace() {
   let sid: string | undefined
   try {
-    const r: any = await host.request('session.create', { messages: [{ role: 'system', content: WORKSPACE_SEED, display_kind: 'hidden' }] })
+    // A titled session is stored at once, so it has a window and a session-list row before any
+    // message (the folder prompt renames it after the folder). The gateway treats an existing title
+    // as that session, so each workspace gets its own (a double-click within a second gets one).
+    const r: any = await host.request('session.create', { title: `New IDE workspace ${new Date().toLocaleTimeString()}` })
     sid = r?.stored_session_id || r?.session_id
   } catch (e) {
     notify('error', `Could not start a new IDE workspace: ${(e as Error).message}`, 'Hermes IDE')

@@ -117,6 +117,14 @@ The element picker is one self-contained script: it highlights the element under
 
 The agent half knows which chats have an IDE window open: the window posts its chat's ids to `/ide/session` every minute, and the backend keeps them with a timestamp in `plugin-data/hermes-ide/ide-sessions.json` (`plugin_data_dir`, per profile). The `pre_llm_call` hook in `__init__.py` returns a fixed note for a turn whose session id renewed its lease in the last three minutes, or whose message carries a picked element. Hermes appends it to that turn's user message only; nothing is stored and the system prompt (and its cache) is untouched. The note points to the bundled skill `hermes-ide:guide` (`skills/guide/SKILL.md`), registered with its description so it shows in the agent's skill index.
 
+## Agent requests and new workspaces
+
+`ide_open` (agent half) validates its arguments, broadcasts `plugin.hermes-ide.open` with a fresh `request_id`, and waits (15 s, or 55 s for `ui: true`) for the IDE window's answer in `plugin-data/hermes-ide/acks/<request_id>.json`, written through `/ide/ack`. Final statuses end the wait; `needs_trust` and `starting` are reported if nothing final arrives in time; no file at all is `no_window`.
+
+Every window receives the broadcast. An IDE window acts when the request names its chat. The main window acts only when no IDE window has announced that chat in the shared `ideWindows` key (each IDE window renews it every minute and clears it on close): it opens the chat's IDE window with the request, which the new window runs after setup (`takePending`). All three paths end in `handleOpenRequest` (`browser.ts`), which opens the file or page, or runs `runUiForAgent`: wait for the folder, `detectProject`, then the trust gate (an untrusted project shows the banner and answers `needs_trust`; it is never started on the agent's word), `startUi`, and the server followed to `ready` (answer `running` with the URL) or `exited` (answer `error` with its last output).
+
+The IDE button runs `newIdeWorkspace` (`ide-chats.ts`): `session.create` with a time-stamped title (a titled session is stored at once; the gateway treats an existing title as that session, hence unique titles), marks it an IDE chat, and opens its IDE window with `folder: true`, which shows the Open Folder dialog in workspace mode. Choosing or creating the folder moves the chat there (`session.cwd.set`) and renames it after the folder (`session.title`).
+
 ## Backend API
 
 All routes are `POST` with a JSON body under `/api/plugins/hermes-ide/`. Paths travel in the body, never the URL. All routes are plain `def`, so FastAPI runs them in its threadpool and a slow `git` or `rg` call never stalls the gateway event loop. OS refusals and timeouts come back as readable `4xx`/`504` errors.
@@ -125,6 +133,7 @@ All routes are `POST` with a JSON body under `/api/plugins/hermes-ide/`. Paths t
 |---|---|---|
 | `/health` | | version, `rg` and `git` availability, platform |
 | `/ide/session` | `ids` (up to 8 chat ids) | renews the IDE-window lease the agent half's `pre_llm_call` hook reads |
+| `/ide/ack` | `request_id`, `status`, `detail`, `url` | an IDE window's answer to an `ide_open` request; the tool polls `plugin-data/hermes-ide/acks/` for it |
 | `/fs/list` | `path`, `show_hidden` | entries (folders first, sorted before the 5,000 cap), `truncated` |
 | `/fs/read` | `path` | `text`, `mtime` (ns), `size`, `bom`, or `binary` / `too_large` (over 5 MB); regular files only |
 | `/fs/stat` | `path` | `exists`, `dir`, `mtime`, canonical `path` |

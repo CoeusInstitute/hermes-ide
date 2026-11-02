@@ -2,6 +2,20 @@
 
 All notable changes to Hermes IDE. Versions follow the `version` in `plugin.yaml`.
 
+## 0.6.0 (2026-11-02)
+
+### The IDE button starts a workspace
+
+- **IDE** in the status bar (and **+** in the full build's IDE group, **New IDE workspace** in the IDE menu) opens a new IDE workspace: a new chat created at once, its IDE window, and a prompt to choose or create the project folder. The chat moves to that folder, is named after it, and is listed with the IDE chats immediately. Ctrl+Alt+I still opens the chat on screen in the IDE. (It used to reopen the chat on screen, often a previous IDE chat.)
+- The Open Folder dialog gains **Create folder**. Its "this chat has not started yet" note no longer shows for a chat whose session arrives a moment after the window opens.
+
+### The agent can run the project's UI, and says what really happened
+
+- `ide_open` with `ui: true` runs the project's UI through the IDE's own detection, trust prompt and dev-server manager. Before, an agent asked to "open the project's UI in the IDE browser" had no way to do it: it started its own `npm run dev` in a terminal, a background process that kept the chat marked as working, and then hunted for the IDE with screenshots.
+- Every `ide_open` waits for the IDE window's answer (`/ide/ack`) and returns it: `opened`, `running` with the URL, `needs_trust`, `starting`, `no_ui`, `no_folder`, `error`, or `no_window`. It used to report success whether or not any window acted.
+- The main window opens the chat's IDE window for an agent request whenever no IDE window shows that chat. It used to act only when that chat was the one focused in the main window, and dropped the request otherwise.
+- The tool description, the [Hermes IDE] note and the `hermes-ide:guide` skill now map requests to calls ("open the project's UI" means `ui: true`), explain each answer, and rule out starting dev servers or inspecting the IDE with screen automation.
+
 ## 0.5.0 (2026-11-02)
 
 ### Element picker

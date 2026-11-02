@@ -8,6 +8,20 @@ Wiring legend:
 - **Mirror**: the IDE follows Desktop state (session, folder, theme) and stays in sync with it.
 - **Add**: built by the plugin because Desktop has no equivalent.
 
+## Gate 0.6: workspaces from the IDE button, an agent that can run the project's UI (shipped in v0.6, verified in a sandboxed Desktop, 2026-11-02)
+
+v0.6 answers the owner's report: asked to "open the project's UI in the IDE browser", the agent started its own dev server and failed; the IDE button reopened an old IDE chat; and the chat stayed marked as working. The live transcript showed the cause: no agent verb for the IDE's dev server, and an `ide_open` that reported success whether or not a window acted. Evidence is from a sandboxed packaged Desktop at 3840 px over CDP, on both builds.
+
+| Feature | Wiring | Verified |
+|---|---|---|
+| IDE button starts a new workspace | `newIdeWorkspace`: `session.create` with a unique title (stored at once), `markIdeChat`, `openIdeWindow({folder: true})` | From the empty main window: new session, its IDE window maximized, "Choose the project folder" shown. A second click opened a second workspace window (both builds) |
+| Choose or create the folder | `FolderDialog` workspace mode: no move checkbox (always moves the chat), **Create folder** (`/fs/create`), rename via `session.title` | Real click on Open: Explorer `DEMO`, chat cwd `ws\demo`, Vite detected, trust banner; the row renamed `demo` |
+| Listed under SESSIONS → IDE at once | IDE chat marked at creation; rows from `listPersistedSessions` | Group rows: `New IDE workspace 3:24:39 PM`, `demo` |
+| "Open the project's UI in the IDE browser" works | `ide_open {ui: true}` → `runUiForAgent`: detect, trust gate, `startUi`, follow to ready | Full build: the sandbox agent loaded `hermes-ide:guide`, called `ide_open {ui: true}` once; the user clicked Always run during the wait; answer `running` + `http://localhost:5174/`; no terminal or dev-server call in the transcript. Catalog build: `running`, then the agent's `desktop_preview` opened the page in the app's Browser |
+| Truthful answers | `/ide/ack` writes `plugin-data/hermes-ide/acks/<id>.json`; the tool polls to a final status | Unit tests: answered, unanswered (`no_window`), trust then running, still waiting (`needs_trust`), `no_ui`; route rejects a malformed id |
+| No chat left "working" | The IDE's servers are not chat processes; the skill and tool forbid agent-started servers | After the turn: no busy session, no row with `data-working` |
+| Requests reach a window | Main window opens the chat's IDE window unless an IDE window announced that chat (`ideWindows` heartbeat) | The agent's request in an open IDE window was handled there; workspace windows opened from the main window took their request |
+
 ## Gate 0.5: the element picker, the IDE's first look, the agent's awareness (shipped in v0.5, verified in a sandboxed Desktop, 2026-11-02)
 
 v0.5 answers the owner's refinements after v0.4. Evidence is from a sandboxed packaged Desktop at 3840 px driven over CDP with real pointer and key input, against a React 18 + Vite demo app (nested components, a shadow root, a long page, text with `[` `]` and `@`), on both builds.

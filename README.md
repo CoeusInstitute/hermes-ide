@@ -41,7 +41,7 @@ A terminal install enables the agent half only. Restart Hermes Desktop if it was
 
 | | Catalog build | Full build |
 |---|---|---|
-| Where | the `catalog` branch, pinned by the Hermes plugin catalog | `main` (what **Install from Git** gets) |
+| Where | a tagged commit per release (`catalog-v0.6.0`), pinned by the Hermes plugin catalog | `main` (what **Install from Git** gets) |
 | Surface | the Desktop plugin SDK only: passes `hermes plugins validate` | the SDK plus a few reads of the app's own markup |
 | Explorer | a resizable panel inside the Editor column | its own column |
 | Project UI | a **Run** view beside Explorer, Search and Source Control; the page opens in the app's Browser pane | a Browser column of its own (address bar, DevTools, the page) |
@@ -52,7 +52,8 @@ The full build exists because the SDK has no hook yet for a session-list group, 
 
 ## Use
 
-In a chat, press **Ctrl+Alt+I**, click **IDE** in the status bar, or run **IDE: Open in IDE Window** from the command palette. The IDE opens the chat on screen; from a page such as Capabilities it asks you to open a chat first. The chat needs one message first, because a draft has no session yet. If the chat already has a plain pop-out window, that window turns into the IDE.
+- **Start a project:** click **IDE** in the status bar. A new IDE workspace opens in its own window and asks for the project folder: pick one, or type a new path and choose **Create folder**. The workspace is a new chat that works in that folder, named after it, and listed with your IDE chats.
+- **Open the chat you are in:** press **Ctrl+Alt+I**, or run **IDE: Open in IDE Window** from the command palette. The chat needs one message first, because a draft has no session yet. If the chat already has a plain pop-out window, that window turns into the IDE.
 
 The IDE window maximizes, hides the session list (it holds one chat), and opens its columns beside the chat: the Explorer first (300 px at most), the Editor with the first file you open. With the project's page open and no editor, the page gets a little more room than the chat (about 53 to 47).
 
@@ -121,13 +122,15 @@ When the IDE opens a folder, it looks for a web UI: a `package.json` whose dev s
 
 ### IDE chats
 
-A chat becomes an IDE chat the first time it opens in an IDE window. Its row in the session list carries an **IDE** badge wherever the app draws it (Pinned, date groups, projects, search); click the badge to open its IDE window. The small arrow beside **IDE** in the status bar lists every IDE chat (pinned first), opens any of them in its window, starts a **New IDE chat** (it opens in the IDE after your first message), and removes a chat from the list with **×**.
+A chat becomes an IDE chat the first time it opens in an IDE window. Its row in the session list carries an **IDE** badge wherever the app draws it (Pinned, date groups, projects, search); click the badge to open its IDE window. The small arrow beside **IDE** in the status bar lists every IDE chat (pinned first), opens any of them in its window, opens the chat on screen in the IDE, starts a **New IDE workspace**, and removes a chat from the list with **×**.
 
-The full build also lists IDE chats in their own **IDE** group under SESSIONS (in the date-grouped list), takes them out of the date groups, and opens the IDE on a plain click anywhere on the row.
+The full build also lists IDE chats in their own **IDE** group under SESSIONS (in the date-grouped list), takes them out of the date groups, and opens the IDE on a plain click anywhere on the row. Its **+** starts a new IDE workspace.
 
 ### The agent drives the IDE
 
-`ide_open` with a `path` (and optional `line`) opens the file in that chat's IDE window, opening the window when needed. With a `url` it offers the page in the project UI view (the full build shows it in its Browser column). For a page in the app's Browser pane, the agent's built-in `desktop_preview` tool (action `open`) does it directly.
+Ask the chat to "open the project's UI in the IDE browser" and the agent calls `ide_open` with `ui: true`: the IDE detects the project's UI, runs its dev server with its own manager (asking you first if you have not trusted the project; click **Always run** or **Run once** while it waits) and shows the page. The agent never starts a dev server of its own for the IDE, so nothing is left running in the chat.
+
+`ide_open` with a `path` (and optional `line`) opens a file in that chat's IDE window; with a `url`, a page that is already running. The IDE window opens when needed, and the tool waits for its answer: `running` (with the URL), `needs_trust`, `starting`, `opened`, `no_ui`, `no_folder`, `error`, or `no_window` when no Hermes IDE window answered. In the catalog build the page goes to the app's Browser pane through the agent's built-in `desktop_preview` tool (action `open`).
 
 ### Your agent knows about the IDE
 
