@@ -59,6 +59,8 @@ def handle_ide_open(args: dict[str, Any], **kw: Any) -> str:
     payload: dict[str, Any] = {"path": path}
     if isinstance(line, int) and line > 0:
         payload["line"] = line
+    if kw.get("session_id"):
+        payload["session_id"] = str(kw["session_id"])
     try:
         from hermes_cli.plugin_events import broadcast_plugin_event
 

@@ -140,3 +140,13 @@ export function pathsFromToolArgs(args: unknown): string[] {
   visit(args, '', 0)
   return [...out]
 }
+
+/** Column plan for a window `width` px wide: Explorer, then editor, then the chat on the right.
+ *  Proportions follow Cursor's agent layout; clamps keep each column usable on small and huge
+ *  screens. */
+export function columnPlan(width: number) {
+  const explorer = Math.round(Math.min(340, Math.max(220, width * 0.14)))
+  const chat = Math.round(Math.min(760, Math.max(380, width * 0.3)))
+  const preview = Math.round(Math.min(1280, Math.max(520, width * 0.32)))
+  return { explorer, chat, preview }
+}

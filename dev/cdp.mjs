@@ -9,6 +9,7 @@
 //   node dev/cdp.mjs fclick ".cm-line >> nth=1"  click inside the editor frame
 //   node dev/cdp.mjs click 640,320               click window coordinates
 //   node dev/cdp.mjs reload 15000                reload the window, print plugin console lines
+//   node dev/cdp.mjs pages                       list app windows; WIN=secondary targets the IDE window
 import { createRequire } from 'node:module'
 
 const agentDir = process.env.HERMES_AGENT_DIR || `${process.env.LOCALAPPDATA}/hermes/hermes-agent`
@@ -18,7 +19,14 @@ const { chromium } = require('playwright-core')
 const [cmd, arg] = process.argv.slice(2)
 const browser = await chromium.connectOverCDP(`http://127.0.0.1:${process.env.CDP_PORT || 9223}`)
 const pages = browser.contexts().flatMap(c => c.pages())
-const page = pages.find(p => /index\.html(?!.*win=)/.test(p.url())) || pages[0]
+const page = process.env.WIN
+  ? pages.find(p => p.url().includes(`win=${process.env.WIN}`))
+  : pages.find(p => /index\.html(?!.*win=)/.test(p.url())) || pages[0]
+if (cmd === 'pages') {
+  console.log(pages.map(p => p.url()).join('\n'))
+  process.exit(0)
+}
+if (!page) throw new Error(`no window matching WIN=${process.env.WIN}`)
 const editorFrame = () => page.frames().filter(fr => fr !== page.mainFrame() && !fr.isDetached()).pop()
 const print = v => console.log(typeof v === 'string' ? v : JSON.stringify(v, null, 1))
 

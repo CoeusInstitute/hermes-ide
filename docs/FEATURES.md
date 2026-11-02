@@ -8,18 +8,20 @@ Wiring legend:
 - **Mirror**: the IDE follows Desktop state (session, folder, theme) and stays in sync with it.
 - **Add**: built by the plugin because Desktop has no equivalent.
 
-## Gate 0: shipped in v0.1 (verified in a sandboxed Desktop, 2026-11-01)
+## Gate 0: shipped in v0.1, reworked in v0.2 to a pop-out IDE window (verified in a sandboxed Desktop, 2026-11-01)
 
 ### Layout and shell
 
 | Feature | Cursor | Wiring | Verified |
 |---|---|---|---|
-| IDE layout: Explorer, Editor, chat, terminal side by side | Editor layout | Add the Explorer pane (`panes`, left) and the Editor tile (`host.openWorkspace`, docked left of the chat); Reuse the chat and terminal (`host.revealPane('terminal')`) | Ctrl+Alt+I arranges all four; screenshot review found no overlap or bright borders |
-| Session chat | Agent chat (Composer) | Reuse. The IDE renders no chat | The chat in the layout is the Desktop session |
-| Sessions list | Agents sidebar | Reuse. The Explorer stacks as a tab beside Sessions | Tabs `SESSIONS / BOTS / EXPLORER` |
+| IDE window: one chat in its own OS window | Cursor's own app window | Reuse the app's single-session pop-out (`window.hermesDesktop.openSessionWindow`); Add the claim (localStorage request, sessionStorage mark), maximize, and the IDE tile (`host.openWorkspace`, docked left of the chat) | v0.2: the status-bar IDE button opened a pop-out that maximized to 3840 px with Explorer, Editor and the chat; the main window kept its own layout (sandbox, 2026-11-01) |
+| Column sizing on open | Cursor's three-column agent layout | Add `columnPlan` (Explorer 14% clamped 220 to 340 px, chat 30% clamped 380 to 760 px, preview 32% clamped 520 to 1280 px) applied by dragging the app's own seams | v0.2 at 3840 px: Explorer 340, chat 845 (the app's chat floor), preview 1233; closing the preview returned its space to the editor; reload kept the plan |
+| Single session only | One agent chat per window | Reuse the pop-out (no global session strip); Add: hide its session list (`view.toggleSidebar`, memory-only in pop-outs) | v0.2: no session list, one chat tab; the main window's sidebar unchanged |
+| Session chat | Agent chat (Composer) | Reuse. The IDE renders no chat | The chat in the IDE window is the Desktop session (Ctrl+L chip went to it; the agent answered about the referenced line) |
+| Plain pop-out of the same chat | n/a | Add: a storage-event listener converts it to the IDE instead of a second window | v0.2: plain 420 px pop-out became the IDE on the IDE click; still one pop-out |
 | Command palette entries | Ctrl+Shift+P | Add `IDE: …` rows to the Desktop palette; Ctrl+Shift+P and F1 inside the editor open the Desktop palette | Palette opened from the editor |
-| Rebindable shortcuts | Keybindings | Add `KEYBINDS_AREA` entries with defaults that avoid the app's chords | Ctrl+Alt+I, Ctrl+Alt+P work |
-| Status bar: line, column, selection, EOL, language | Status bar | Add a status item | `Ln 1, Col 1 · CRLF · TypeScript` |
+| Rebindable shortcuts | Keybindings | Add `KEYBINDS_AREA` entries with defaults that avoid the app's chords. Main window: only Ctrl+Alt+I (open the IDE window). IDE window: the full set | Ctrl+Alt+I, Ctrl+Alt+P work |
+| Status bar: line, column, selection, EOL, language; IDE button in the main window | Status bar | Add a status item | `Ln 1, Col 1 · CRLF · TypeScript` |
 | Settings page | Settings | Add under Settings → Plugins (follow folder, review edits, hidden files, wrap, font size) | Page registered |
 | Theme and font parity | Themes | Mirror: the editor reads the app's resolved `--ui-*` tokens and `--font-*`, and loads the app's JetBrains Mono bytes; re-reads after every skin, mode or accent change | Switched the app dark → light → dark: the editor followed both ways within 2.5 s; the frame reported JetBrains Mono 400, 700 and italic loaded |
 

@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { fileRef, fuzzyScore, isInside, pathsFromToolArgs, rankFiles, relPath, splitLineSuffix } from '../src/util.ts'
+import { columnPlan, fileRef, fuzzyScore, isInside, pathsFromToolArgs, rankFiles, relPath, splitLineSuffix } from '../src/util.ts'
 
 test('fileRef emits the @file syntax Hermes expands, relative to the workspace', () => {
   assert.equal(fileRef('D:/proj/src/app.ts', 'D:/proj'), '@file:src/app.ts')
@@ -39,4 +39,11 @@ test('tool arguments yield the files an agent turn may have written', () => {
   )
   assert.deepEqual(pathsFromToolArgs({ edits: [{ file_path: 'c.py' }] }), ['c.py'])
   assert.deepEqual(pathsFromToolArgs(null), [])
+})
+
+test('columnPlan sizes Explorer, chat and preview to the window, within usable clamps', () => {
+  assert.deepEqual(columnPlan(1920), { explorer: 269, chat: 576, preview: 614 })
+  assert.deepEqual(columnPlan(1280), { explorer: 220, chat: 384, preview: 520 })
+  assert.deepEqual(columnPlan(3840), { explorer: 340, chat: 760, preview: 1229 })
+  assert.deepEqual(columnPlan(900), { explorer: 220, chat: 380, preview: 520 })
 })

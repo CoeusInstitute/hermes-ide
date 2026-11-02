@@ -3,7 +3,9 @@
 
 import { atom, host } from '@hermes/plugin-sdk'
 
-import { baseName, detectEol, fileRef, isInside, normPath, pathKey, pathsFromToolArgs } from './util'
+import { baseName, columnPlan, detectEol, fileRef, isInside, normPath, pathKey, pathsFromToolArgs } from './util'
+
+export { columnPlan }
 
 // ── context ──────────────────────────────────────────────────────────────────────────────────
 
@@ -281,7 +283,8 @@ let closeEditor: (() => void) | null = null
 let disposing = false
 
 export function ensureEditor() {
-  if (closeEditor || !renderEditor) {
+  // The IDE lives only in its own pop-out window; the main window keeps its normal chat layout.
+  if (closeEditor || !renderEditor || !IDE_WINDOW) {
     return
   }
   if (typeof host.openWorkspace !== 'function') {
@@ -289,19 +292,15 @@ export function ensureEditor() {
     return
   }
   closeEditor = host.openWorkspace('hermes-ide-editor', {
-    title: 'Editor',
+    title: 'IDE',
     dock: { pane: 'workspace', pos: 'left' },
-    minWidth: '24rem',
+    minWidth: '28rem',
     render: renderEditor,
     onClose: () => {
       closeEditor = null
       detachFrame(frameWin)
-      if (!disposing) {
-        ctx.storage.set('editorOpen', false) // the user closed it; do not reopen on next launch
-      }
     }
   })
-  ctx.storage.set('editorOpen', true)
 }
 
 /** Plugin unload or reload: close the tile without recording it as the user's choice. */
@@ -733,7 +732,7 @@ export async function switchSession(next: string | null) {
   $active.set(null)
   await syncRoot()
   const active = saved.active && tabs.some(t => pathKey(t.path) === pathKey(saved.active!)) ? saved.active : tabs[0]?.path
-  if (active && (closeEditor || ctx.storage.get('editorOpen', false))) {
+  if (active && closeEditor) {
     await openFile(active)
   }
 }
@@ -818,21 +817,333 @@ export function revealSidebar(view?: 'explorer' | 'search' | 'scm') {
   if (view) {
     $view.set(view)
   }
-  host.revealPane?.('hermes-ide:explorer')
+  $explorerHidden.set(false)
+  ensureEditor()
+  host.revealPane?.('plugin-workspace:hermes-ide-editor')
   if (view === 'search') {
     $searchFocus.set($searchFocus.get() + 1)
   }
 }
 
 export function showIde() {
+  if (!IDE_WINDOW) {
+    void openIdeWindow()
+    return
+  }
   revealSidebar('explorer')
-  ensureEditor()
-  host.revealPane?.('terminal')
   // Tabs restored from a previous launch load lazily; bring the active one up now.
   const tabs = $tabs.get()
   const want = $active.get() ?? tabs[0]?.path
   if (want && !meta.has(pathKey(want))) {
     activate(want)
+  }
+  void fitColumns()
+}
+
+// ── the IDE window: one pop-out window per chat, holding only that chat ─────────────────────
+//
+// The main window opens the app's own single-session pop-out (the window a session opens in
+// with "Open in new window") and leaves a request in localStorage, which that window's copy of
+// this plugin claims on load. sessionStorage keeps the claim across a reload of that window.
+
+const OPEN_REQUEST = 'hermes-ide:open-window'
+const WINDOW_MARK = 'hermes-ide:window'
+const PENDING_OPEN = 'hermes-ide:pending-open'
+
+interface OpenRequest {
+  sid: string
+  at: number
+  path?: string
+  line?: number
+}
+
+const isPopout = () => new URLSearchParams(location.search).get('win') === 'secondary'
+
+/** The stored session id this pop-out window was opened for (its route is `#/<id>`). */
+export function windowSessionId(): string | null {
+  const m = /^#\/([^/?#]+)/.exec(location.hash)
+  return m ? decodeURIComponent(m[1]) : host.state.focusedStoredSessionId.get() || null
+}
+
+function readRequest(): OpenRequest | null {
+  try {
+    const req = JSON.parse(localStorage.getItem(OPEN_REQUEST) || 'null')
+    return req && typeof req.sid === 'string' && typeof req.at === 'number' ? req : null
+  } catch {
+    return null
+  }
+}
+
+/** Take a request addressed to this window; stale requests (over a minute old) are ignored. */
+function claimRequest(): OpenRequest | null {
+  const req = readRequest()
+  const sid = windowSessionId()
+  if (!req || !sid || req.sid !== sid || Date.now() - req.at > 60_000) {
+    return null
+  }
+  localStorage.removeItem(OPEN_REQUEST)
+  if (req.path) {
+    sessionStorage.setItem(PENDING_OPEN, JSON.stringify({ path: req.path, line: req.line }))
+  }
+  return req
+}
+
+function detectIdeWindow(): boolean {
+  if (!isPopout()) {
+    return false
+  }
+  if (sessionStorage.getItem(WINDOW_MARK) === '1') {
+    return true
+  }
+  if (claimRequest()) {
+    sessionStorage.setItem(WINDOW_MARK, '1')
+    return true
+  }
+  return false
+}
+
+export const IDE_WINDOW = detectIdeWindow()
+
+export const $explorerHidden = atom(false)
+
+/** Main window: open the chat in focus in its own IDE window (or front the one it has). */
+export async function openIdeWindow(open?: { path: string; line?: number }) {
+  if (IDE_WINDOW) {
+    showIde()
+    return
+  }
+  const sid = host.state.focusedStoredSessionId.get()
+  const bridge = (window as any).hermesDesktop
+  if (!sid) {
+    notify('info', 'Send the first message in this chat, then open it in the IDE.', 'Hermes IDE')
+    return
+  }
+  if (typeof bridge?.openSessionWindow !== 'function') {
+    notify('warning', 'This Hermes Desktop cannot open pop-out windows. Update Hermes Desktop.', 'Hermes IDE')
+    return
+  }
+  const req: OpenRequest = { sid, at: Date.now(), ...(open?.path ? { path: open.path, line: open.line } : {}) }
+  // Already in a plain pop-out of this chat: the app would only re-front this window, and a
+  // window never receives its own storage events, so convert it here.
+  if (isPopout() && windowSessionId() === sid) {
+    sessionStorage.setItem(WINDOW_MARK, '1')
+    if (req.path) {
+      sessionStorage.setItem(PENDING_OPEN, JSON.stringify({ path: req.path, line: req.line }))
+    }
+    location.reload()
+    return
+  }
+  localStorage.setItem(OPEN_REQUEST, JSON.stringify(req))
+  const owner = host.state.focusedSessionOwner?.get?.()
+  try {
+    await bridge.openSessionWindow(sid, {
+      profile: owner?.profile ?? host.state.focusedSessionProfile?.get?.() ?? null,
+      connectionId: owner?.connectionId ?? null
+    })
+  } catch (e) {
+    localStorage.removeItem(OPEN_REQUEST)
+    notify('error', `Could not open the IDE window: ${(e as Error).message}`, 'Hermes IDE')
+  }
+}
+
+/** Every pop-out listens: a request for its chat either converts a plain pop-out of that chat
+ *  into the IDE (the app fronts the existing window instead of opening a second one) or, in the
+ *  IDE window, carries a file to open. */
+export function onStorageRequest(e: StorageEvent) {
+  if (e.key !== OPEN_REQUEST || !e.newValue || !isPopout()) {
+    return
+  }
+  const req = claimRequest()
+  if (!req) {
+    return
+  }
+  if (!IDE_WINDOW) {
+    sessionStorage.setItem(WINDOW_MARK, '1')
+    location.reload()
+    return
+  }
+  showIde()
+  if (req.path) {
+    sessionStorage.removeItem(PENDING_OPEN)
+    void openFile(req.path, { line: req.line })
+  }
+}
+
+const frames = (n = 2) => new Promise<void>(resolve => {
+  const step = () => (--n <= 0 ? resolve() : requestAnimationFrame(step))
+  requestAnimationFrame(step)
+})
+
+/** Resolve once the window size has held still for `quiet` ms (a maximize lands in steps). */
+function sizeSettled(quiet = 300, cap = 2500) {
+  return new Promise<void>(resolve => {
+    let timer = window.setTimeout(done, quiet)
+    const cap_ = window.setTimeout(done, cap)
+    function onResize() {
+      clearTimeout(timer)
+      timer = window.setTimeout(done, quiet)
+    }
+    function done() {
+      clearTimeout(timer)
+      clearTimeout(cap_)
+      window.removeEventListener('resize', onResize)
+      resolve()
+    }
+    window.addEventListener('resize', onResize)
+  })
+}
+
+/** Move the app's split seam at `edge` (window x) to `target`. shortcut: the SDK has no door to
+ *  size a split, so this drags the app's own sash with synthetic pointer events (tree-split.tsx
+ *  accepts them, clamps to each zone's floor, and commits once on release). Upgrade to a host
+ *  door when the SDK ships one; without a sash the layout keeps the app's even split. */
+async function dragSeam(edge: number, target: number): Promise<boolean> {
+  const ide = document.querySelector<HTMLElement>('.hi-ide')
+  const sash = [...document.querySelectorAll<HTMLElement>('[role="separator"]')]
+    .filter(el => !ide?.contains(el))
+    .map(el => ({ el, r: el.getBoundingClientRect() }))
+    .filter(s => s.r.height > 200 && s.r.width > 0 && s.r.width < 24 && Math.abs(s.r.left - edge) < 24)
+    .sort((a, b) => Math.abs(a.r.left - edge) - Math.abs(b.r.left - edge))[0]
+  if (!sash) {
+    return false
+  }
+  const y = Math.round(sash.r.top + sash.r.height / 2)
+  const base = { bubbles: true, cancelable: true, pointerId: 1, pointerType: 'mouse', isPrimary: true, clientY: y }
+  sash.el.dispatchEvent(new PointerEvent('pointerdown', { ...base, clientX: Math.round(sash.r.left + sash.r.width / 2), button: 0, buttons: 1 }))
+  window.dispatchEvent(new PointerEvent('pointermove', { ...base, clientX: Math.round(target), button: -1, buttons: 1 }))
+  await frames(2) // the sash previews once per animation frame and commits on release
+  window.dispatchEvent(new PointerEvent('pointerup', { ...base, clientX: Math.round(target), button: 0, buttons: 0 }))
+  return true
+}
+
+/** Size the chat column (the zone right of the IDE tile) to the column plan. */
+export async function fitColumns(): Promise<boolean> {
+  await frames(3)
+  const ide = document.querySelector<HTMLElement>('.hi-ide')
+  if (!ide) {
+    return false
+  }
+  const { chat } = columnPlan(window.innerWidth)
+  const right = ide.getBoundingClientRect().right
+  const end = previewZones().reduce((x, z) => Math.min(x, z.getBoundingClientRect().left), window.innerWidth)
+  return dragSeam(right, Math.max(Math.round(window.innerWidth * 0.3), end - chat))
+}
+
+/** Browser and preview zones the app docked to the right of the chat (the core preview pane
+ *  carries the Browser's Annotate tool, which picks elements for the chat). */
+function previewZones(): HTMLElement[] {
+  const chat = document.querySelector<HTMLElement>('[data-tree-group="grp-main"]')
+  if (!chat) {
+    return []
+  }
+  const chatRight = chat.getBoundingClientRect().right
+  const seen = new Set<string>()
+  return [...document.querySelectorAll<HTMLElement>('[data-tree-group]')].filter(z => {
+    const r = z.getBoundingClientRect()
+    const id = z.getAttribute('data-tree-group') || ''
+    if (r.width <= 0 || r.left < chatRight - 2 || seen.has(id)) return false
+    seen.add(id)
+    return true
+  })
+}
+
+const fittedPreviews = new Set<string>()
+let fitting = false
+
+/** A preview docked beside the chat opens as a narrow strip (or comes back oversized after a
+ *  reload); fit it to the plan once (the editor gives or takes the space, the chat keeps its
+ *  width), then leave any size the user picks. */
+async function fitPreview() {
+  const zone = previewZones()[0]
+  const id = zone?.getAttribute('data-tree-group')
+  if (fitting || !zone || !id || fittedPreviews.has(id)) {
+    return
+  }
+  fittedPreviews.add(id)
+  fitting = true
+  try {
+    const W = window.innerWidth
+    const { preview } = columnPlan(W)
+    if (Math.abs(zone.getBoundingClientRect().width - preview) < preview * 0.1) {
+      return
+    }
+    const chatW = document.querySelector<HTMLElement>('[data-tree-group="grp-main"]')!.getBoundingClientRect().width
+    const ide = document.querySelector<HTMLElement>('.hi-ide')
+    // Absolute targets, re-measured between moves: each seam drag can shift the others.
+    if (ide) {
+      await dragSeam(ide.getBoundingClientRect().right, W - preview - chatW)
+      await frames(3)
+    }
+    const left = previewZones()[0]?.getBoundingClientRect().left
+    if (left !== undefined && Math.abs(left - (W - preview)) > 8) {
+      await dragSeam(left, W - preview)
+    }
+  } finally {
+    fitting = false
+  }
+}
+
+/** Watch the IDE window's layout for previews the app or the agent opens. */
+export function watchPreviews() {
+  let timer = 0
+  let zones = -1
+  const obs = new MutationObserver(() => {
+    const n = document.querySelectorAll('[data-tree-group]').length
+    if (n === zones) return // chat streaming mutates constantly; only a new or closed zone matters
+    zones = n
+    clearTimeout(timer)
+    timer = window.setTimeout(() => {
+      if (previewZones().length) {
+        void fitPreview()
+        return
+      }
+      // A closed preview hands its space to the chat; in an IDE it belongs to the editor.
+      const chat = document.querySelector<HTMLElement>('[data-tree-group="grp-main"]')?.getBoundingClientRect().width ?? 0
+      if (!fitting && chat > columnPlan(window.innerWidth).chat + 160) {
+        void fitColumns()
+      }
+    }, 400)
+  })
+  obs.observe(document.body, { childList: true, subtree: true })
+  ctx.onDispose(() => {
+    clearTimeout(timer)
+    obs.disconnect()
+  })
+}
+
+/** The IDE window shows one chat: hide the app's session list there (pop-out layout state is
+ *  memory-only, so this never touches the main window's sidebar). */
+function hideSessionList() {
+  const list = document.querySelector<HTMLElement>('[data-tree-group="grp-sessions"]')
+  if (list && list.getBoundingClientRect().width > 0) {
+    ctx.runAction?.('view.toggleSidebar')
+  }
+}
+
+/** IDE window boot: take the room an IDE needs, show the IDE beside the chat, size the columns. */
+export async function setupIdeWindow() {
+  const bridge = (window as any).hermesDesktop
+  // The app opens pop-outs at a compact 420px; maximize once per window (the user can restore it).
+  if (!sessionStorage.getItem('hermes-ide:sized') && window.outerWidth < screen.availWidth * 0.85) {
+    sessionStorage.setItem('hermes-ide:sized', '1')
+    bridge?.windowControls?.toggleMaximize?.()
+  }
+  ensureEditor()
+  await sizeSettled()
+  hideSessionList()
+  await frames(2)
+  await fitColumns()
+  const pending = sessionStorage.getItem(PENDING_OPEN)
+  if (pending) {
+    sessionStorage.removeItem(PENDING_OPEN)
+    try {
+      const p = JSON.parse(pending)
+      if (typeof p?.path === 'string') {
+        await openFile(p.path, { line: Number(p.line) > 0 ? Number(p.line) : undefined })
+      }
+    } catch {
+      /* malformed request: ignore */
+    }
   }
 }
 
@@ -852,7 +1163,7 @@ export function runCommand(id: string) {
       revealSidebar('explorer')
       break
     case 'toggleSidebar':
-      ctx.runAction?.('view.toggleSidebar')
+      $explorerHidden.set(!$explorerHidden.get())
       break
     case 'toggleTerminal':
       host.revealPane?.('terminal')

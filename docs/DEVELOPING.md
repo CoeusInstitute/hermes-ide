@@ -44,22 +44,25 @@ Hot reload keeps earlier module instances alive (ES modules cannot be unloaded),
 Never test against your real profile. Run a second Desktop with its own Hermes home, user-data folder and app name, and drive it over CDP.
 
 1. Create the sandbox home and copy only `config.yaml`, `.env`, `auth.json` and `profile.yaml` into it. Those copies are secrets: delete the sandbox when you are done.
-2. In the sandbox `config.yaml`, empty `mcp_servers` and `plugins`, and clear `memory.provider`, so the sandbox starts no MCP servers and writes nothing to shared memory.
-3. Install from GitHub into the sandbox: `HERMES_HOME=<sandbox> hermes plugins install CoeusInstitute/hermes-ide --enable`.
-4. Launch the packaged app (Windows example):
+2. In the sandbox `config.yaml`, empty `mcp_servers`, set `plugins.enabled` to `[hermes-ide]`, and clear `memory.provider`, so the sandbox starts no MCP servers and writes nothing to shared memory. In the sandbox `.env`, delete every `API_SERVER_*` line: a copied `API_SERVER_PORT` binds the same port as your real gateway.
+3. Install into the sandbox. From GitHub: `HERMES_HOME=<sandbox> hermes plugins install CoeusInstitute/hermes-ide --enable`. To test an unpushed build, copy the package to `<sandbox>/plugins/hermes-ide/` and `desktop/plugin.js` to `<sandbox>/desktop-plugins/hermes-ide/plugin.js`.
+4. Start the sandbox gateway yourself (the packaged app cannot spawn a detached gateway from a script-launched process on Windows and reports `windows_breakaway_unavailable`): `HERMES_HOME=<sandbox> hermes gateway run` in a background shell.
+5. Launch the packaged app against your existing Hermes checkout, so it does not install a second runtime (Windows example):
 
    ```bash
    HERMES_HOME='C:\…\sandbox' HERMES_DESKTOP_USER_DATA_DIR='C:\…\sandbox\userdata' HERMES_DESKTOP_APP_NAME=HermesIDESandbox \
+   HERMES_DESKTOP_HERMES_ROOT='C:\…\hermes\hermes-agent' \
      powershell -NoProfile -Command "Start-Process '<…>\Hermes.exe' -ArgumentList '--remote-debugging-port=9223'"
    ```
 
-   Pass native Windows paths; a Git Bash `/c/...` path silently creates an empty twin home.
-5. Turn on the desktop half in **Capabilities → Plugins** (search `Hermes IDE`).
-6. Drive it with `node dev/cdp.mjs …` (see the header of that file). Useful checks:
-   - `node dev/cdp.mjs key "Control+Alt+i"` then `eval "document.querySelectorAll('.hi-pane').length"` (expect 2)
-   - `frame "document.querySelector('.cm-content').innerText"` to read the editor
+   Pass native Windows paths; a Git Bash `/c/...` path silently creates an empty twin home. The first boot may build its own Python environment inside the sandbox (about 800 MB, a few minutes); it does not touch your real one.
+6. Turn on the desktop half in **Capabilities → Plugins** (search `Hermes IDE`), or set `{"hermes-ide": true}` in the `hermes.desktop.pluginDecisions.v2` localStorage key and reload the window.
+7. Drive it with `node dev/cdp.mjs …` (see the header of that file). `node dev/cdp.mjs pages` lists the windows; prefix a command with `WIN=secondary` to target the IDE window. Useful checks:
+   - send one message in the main window (a draft has no session to pop out), then `eval "document.querySelector('.hi-open-ide').click()"` and `WIN=secondary node dev/cdp.mjs eval "innerWidth"` (expect the screen width: the IDE window maximizes)
+   - `WIN=secondary … eval` on `[data-tree-group]` rects: expect the IDE tile, `grp-main` (the chat) and, after Open in Browser, the preview zone, sized per `columnPlan`
+   - `WIN=secondary node dev/cdp.mjs frame "document.querySelector('.cm-content').innerText"` to read the editor
    - `key "Control+Shift+F"`: use the shifted capital letter; a lowercase `f` with Shift is not what a real keyboard sends and CodeMirror routes it differently
-7. Close the sandbox app and delete the sandbox home.
+8. Close the sandbox app, stop the sandbox gateway, and delete the sandbox home.
 
 `dev/cdp.mjs` resets Playwright's color-scheme emulation on attach. Without that reset, a Desktop set to the System theme flips to light while the driver is connected, and every screenshot and token read lies about what the user sees.
 

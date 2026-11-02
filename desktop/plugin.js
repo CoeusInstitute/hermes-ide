@@ -93,6 +93,10 @@ function pathsFromToolArgs(args) {
   };
   return visit(args, "", 0), [...out];
 }
+function columnPlan(width) {
+  let explorer = Math.round(Math.min(340, Math.max(220, width * 0.14))), chat = Math.round(Math.min(760, Math.max(380, width * 0.3))), preview = Math.round(Math.min(1280, Math.max(520, width * 0.32)));
+  return { explorer, chat, preview };
+}
 
 // src/core.ts
 var ctx = null, renderEditor = null;
@@ -216,20 +220,20 @@ function onFrameMessage(e) {
 }
 var closeEditor = null, disposing = !1;
 function ensureEditor() {
-  if (!(closeEditor || !renderEditor)) {
+  if (!(closeEditor || !renderEditor || !IDE_WINDOW)) {
     if (typeof host.openWorkspace != "function") {
       notify("warning", "This Hermes Desktop is too old for the IDE editor. Update Hermes Desktop.");
       return;
     }
     closeEditor = host.openWorkspace("hermes-ide-editor", {
-      title: "Editor",
+      title: "IDE",
       dock: { pane: "workspace", pos: "left" },
-      minWidth: "24rem",
+      minWidth: "28rem",
       render: renderEditor,
       onClose: () => {
-        closeEditor = null, detachFrame(frameWin), disposing || ctx.storage.set("editorOpen", !1);
+        closeEditor = null, detachFrame(frameWin);
       }
-    }), ctx.storage.set("editorOpen", !0);
+    });
   }
 }
 function disposeEditor() {
@@ -477,7 +481,7 @@ async function switchSession(next) {
     tabs.some((t) => pathKey(t.path) === pathKey(p)) || tabs.push({ path: p, name: baseName(p), dirty: !1, preview: !1 });
   $tabs.set(tabs), $active.set(null), await syncRoot();
   let active = saved.active && tabs.some((t) => pathKey(t.path) === pathKey(saved.active)) ? saved.active : tabs[0]?.path;
-  active && (closeEditor || ctx.storage.get("editorOpen", !1)) && await openFile(active);
+  active && closeEditor && await openFile(active);
 }
 var pendingCwd = null;
 async function applyPendingCwd() {
@@ -512,12 +516,171 @@ function openInBrowser(target) {
   $browserTarget.set(target);
 }
 function revealSidebar(view) {
-  view && $view.set(view), host.revealPane?.("hermes-ide:explorer"), view === "search" && $searchFocus.set($searchFocus.get() + 1);
+  view && $view.set(view), $explorerHidden.set(!1), ensureEditor(), host.revealPane?.("plugin-workspace:hermes-ide-editor"), view === "search" && $searchFocus.set($searchFocus.get() + 1);
 }
 function showIde() {
-  revealSidebar("explorer"), ensureEditor(), host.revealPane?.("terminal");
+  if (!IDE_WINDOW) {
+    openIdeWindow();
+    return;
+  }
+  revealSidebar("explorer");
   let tabs = $tabs.get(), want = $active.get() ?? tabs[0]?.path;
-  want && !meta.has(pathKey(want)) && activate(want);
+  want && !meta.has(pathKey(want)) && activate(want), fitColumns();
+}
+var OPEN_REQUEST = "hermes-ide:open-window", WINDOW_MARK = "hermes-ide:window", PENDING_OPEN = "hermes-ide:pending-open", isPopout = () => new URLSearchParams(location.search).get("win") === "secondary";
+function windowSessionId() {
+  let m = /^#\/([^/?#]+)/.exec(location.hash);
+  return m ? decodeURIComponent(m[1]) : host.state.focusedStoredSessionId.get() || null;
+}
+function readRequest() {
+  try {
+    let req = JSON.parse(localStorage.getItem(OPEN_REQUEST) || "null");
+    return req && typeof req.sid == "string" && typeof req.at == "number" ? req : null;
+  } catch {
+    return null;
+  }
+}
+function claimRequest() {
+  let req = readRequest(), sid = windowSessionId();
+  return !req || !sid || req.sid !== sid || Date.now() - req.at > 6e4 ? null : (localStorage.removeItem(OPEN_REQUEST), req.path && sessionStorage.setItem(PENDING_OPEN, JSON.stringify({ path: req.path, line: req.line })), req);
+}
+function detectIdeWindow() {
+  return isPopout() ? sessionStorage.getItem(WINDOW_MARK) === "1" ? !0 : claimRequest() ? (sessionStorage.setItem(WINDOW_MARK, "1"), !0) : !1 : !1;
+}
+var IDE_WINDOW = detectIdeWindow(), $explorerHidden = atom(!1);
+async function openIdeWindow(open) {
+  if (IDE_WINDOW) {
+    showIde();
+    return;
+  }
+  let sid = host.state.focusedStoredSessionId.get(), bridge = window.hermesDesktop;
+  if (!sid) {
+    notify("info", "Send the first message in this chat, then open it in the IDE.", "Hermes IDE");
+    return;
+  }
+  if (typeof bridge?.openSessionWindow != "function") {
+    notify("warning", "This Hermes Desktop cannot open pop-out windows. Update Hermes Desktop.", "Hermes IDE");
+    return;
+  }
+  let req = { sid, at: Date.now(), ...open?.path ? { path: open.path, line: open.line } : {} };
+  if (isPopout() && windowSessionId() === sid) {
+    sessionStorage.setItem(WINDOW_MARK, "1"), req.path && sessionStorage.setItem(PENDING_OPEN, JSON.stringify({ path: req.path, line: req.line })), location.reload();
+    return;
+  }
+  localStorage.setItem(OPEN_REQUEST, JSON.stringify(req));
+  let owner = host.state.focusedSessionOwner?.get?.();
+  try {
+    await bridge.openSessionWindow(sid, {
+      profile: owner?.profile ?? host.state.focusedSessionProfile?.get?.() ?? null,
+      connectionId: owner?.connectionId ?? null
+    });
+  } catch (e) {
+    localStorage.removeItem(OPEN_REQUEST), notify("error", `Could not open the IDE window: ${e.message}`, "Hermes IDE");
+  }
+}
+function onStorageRequest(e) {
+  if (e.key !== OPEN_REQUEST || !e.newValue || !isPopout())
+    return;
+  let req = claimRequest();
+  if (req) {
+    if (!IDE_WINDOW) {
+      sessionStorage.setItem(WINDOW_MARK, "1"), location.reload();
+      return;
+    }
+    showIde(), req.path && (sessionStorage.removeItem(PENDING_OPEN), openFile(req.path, { line: req.line }));
+  }
+}
+var frames = (n = 2) => new Promise((resolve) => {
+  let step = () => --n <= 0 ? resolve() : requestAnimationFrame(step);
+  requestAnimationFrame(step);
+});
+function sizeSettled(quiet = 300, cap = 2500) {
+  return new Promise((resolve) => {
+    let timer = window.setTimeout(done, quiet), cap_ = window.setTimeout(done, cap);
+    function onResize() {
+      clearTimeout(timer), timer = window.setTimeout(done, quiet);
+    }
+    function done() {
+      clearTimeout(timer), clearTimeout(cap_), window.removeEventListener("resize", onResize), resolve();
+    }
+    window.addEventListener("resize", onResize);
+  });
+}
+async function dragSeam(edge, target) {
+  let ide = document.querySelector(".hi-ide"), sash = [...document.querySelectorAll('[role="separator"]')].filter((el) => !ide?.contains(el)).map((el) => ({ el, r: el.getBoundingClientRect() })).filter((s) => s.r.height > 200 && s.r.width > 0 && s.r.width < 24 && Math.abs(s.r.left - edge) < 24).sort((a, b) => Math.abs(a.r.left - edge) - Math.abs(b.r.left - edge))[0];
+  if (!sash)
+    return !1;
+  let base = { bubbles: !0, cancelable: !0, pointerId: 1, pointerType: "mouse", isPrimary: !0, clientY: Math.round(sash.r.top + sash.r.height / 2) };
+  return sash.el.dispatchEvent(new PointerEvent("pointerdown", { ...base, clientX: Math.round(sash.r.left + sash.r.width / 2), button: 0, buttons: 1 })), window.dispatchEvent(new PointerEvent("pointermove", { ...base, clientX: Math.round(target), button: -1, buttons: 1 })), await frames(2), window.dispatchEvent(new PointerEvent("pointerup", { ...base, clientX: Math.round(target), button: 0, buttons: 0 })), !0;
+}
+async function fitColumns() {
+  await frames(3);
+  let ide = document.querySelector(".hi-ide");
+  if (!ide)
+    return !1;
+  let { chat } = columnPlan(window.innerWidth), right = ide.getBoundingClientRect().right, end = previewZones().reduce((x, z) => Math.min(x, z.getBoundingClientRect().left), window.innerWidth);
+  return dragSeam(right, Math.max(Math.round(window.innerWidth * 0.3), end - chat));
+}
+function previewZones() {
+  let chat = document.querySelector('[data-tree-group="grp-main"]');
+  if (!chat)
+    return [];
+  let chatRight = chat.getBoundingClientRect().right, seen = /* @__PURE__ */ new Set();
+  return [...document.querySelectorAll("[data-tree-group]")].filter((z) => {
+    let r = z.getBoundingClientRect(), id = z.getAttribute("data-tree-group") || "";
+    return r.width <= 0 || r.left < chatRight - 2 || seen.has(id) ? !1 : (seen.add(id), !0);
+  });
+}
+var fittedPreviews = /* @__PURE__ */ new Set(), fitting = !1;
+async function fitPreview() {
+  let zone = previewZones()[0], id = zone?.getAttribute("data-tree-group");
+  if (!(fitting || !zone || !id || fittedPreviews.has(id))) {
+    fittedPreviews.add(id), fitting = !0;
+    try {
+      let W = window.innerWidth, { preview } = columnPlan(W);
+      if (Math.abs(zone.getBoundingClientRect().width - preview) < preview * 0.1)
+        return;
+      let chatW = document.querySelector('[data-tree-group="grp-main"]').getBoundingClientRect().width, ide = document.querySelector(".hi-ide");
+      ide && (await dragSeam(ide.getBoundingClientRect().right, W - preview - chatW), await frames(3));
+      let left = previewZones()[0]?.getBoundingClientRect().left;
+      left !== void 0 && Math.abs(left - (W - preview)) > 8 && await dragSeam(left, W - preview);
+    } finally {
+      fitting = !1;
+    }
+  }
+}
+function watchPreviews() {
+  let timer = 0, zones = -1, obs = new MutationObserver(() => {
+    let n = document.querySelectorAll("[data-tree-group]").length;
+    n !== zones && (zones = n, clearTimeout(timer), timer = window.setTimeout(() => {
+      if (previewZones().length) {
+        fitPreview();
+        return;
+      }
+      let chat = document.querySelector('[data-tree-group="grp-main"]')?.getBoundingClientRect().width ?? 0;
+      !fitting && chat > columnPlan(window.innerWidth).chat + 160 && fitColumns();
+    }, 400));
+  });
+  obs.observe(document.body, { childList: !0, subtree: !0 }), ctx.onDispose(() => {
+    clearTimeout(timer), obs.disconnect();
+  });
+}
+function hideSessionList() {
+  let list = document.querySelector('[data-tree-group="grp-sessions"]');
+  list && list.getBoundingClientRect().width > 0 && ctx.runAction?.("view.toggleSidebar");
+}
+async function setupIdeWindow() {
+  let bridge = window.hermesDesktop;
+  !sessionStorage.getItem("hermes-ide:sized") && window.outerWidth < screen.availWidth * 0.85 && (sessionStorage.setItem("hermes-ide:sized", "1"), bridge?.windowControls?.toggleMaximize?.()), ensureEditor(), await sizeSettled(), hideSessionList(), await frames(2), await fitColumns();
+  let pending = sessionStorage.getItem(PENDING_OPEN);
+  if (pending) {
+    sessionStorage.removeItem(PENDING_OPEN);
+    try {
+      let p = JSON.parse(pending);
+      typeof p?.path == "string" && await openFile(p.path, { line: Number(p.line) > 0 ? Number(p.line) : void 0 });
+    } catch {
+    }
+  }
 }
 function runCommand(id) {
   let active = $active.get();
@@ -535,7 +698,7 @@ function runCommand(id) {
       revealSidebar("explorer");
       break;
     case "toggleSidebar":
-      ctx.runAction?.("view.toggleSidebar");
+      $explorerHidden.set(!$explorerHidden.get());
       break;
     case "toggleTerminal":
       host.revealPane?.("terminal");
@@ -704,6 +867,15 @@ var STYLES = `
 .hi-qo-row[data-on=true]{background:var(--ui-row-active-background);color:var(--ui-text-primary)}
 .hi-status{display:inline-flex;gap:10px;align-items:center;padding:0 6px;font-size:.6875rem;color:var(--ui-text-tertiary);white-space:nowrap}
 .hi-card{display:inline-flex;align-items:center;gap:8px;margin:4px 0;padding:6px 10px;border:1px solid var(--ui-stroke-secondary);border-radius:8px;font-size:12.5px;color:var(--ui-text-primary);background:none;cursor:pointer;font-family:var(--font-mono)}
+.hi-ide{display:flex;height:100%;min-height:0;min-width:0}
+.hi-ide-side{flex:none;min-width:0;height:100%;border-right:1px solid var(--ui-stroke-tertiary)}
+.hi-ide-main{flex:1;min-width:0;height:100%}
+.hi-ide-sash{flex:none;width:5px;margin:0 -3px 0 -2px;z-index:2;cursor:col-resize;position:relative}
+.hi-ide-sash:hover,.hi-ide[data-drag=true] .hi-ide-sash{background:color-mix(in srgb,var(--ui-accent) 45%,transparent)}
+.hi-ide[data-drag=true]{cursor:col-resize;user-select:none}
+.hi-ide[data-drag=true] iframe{pointer-events:none}
+.hi-open-ide{display:inline-flex;align-items:center;gap:4px;height:18px;padding:0 6px;border:0;border-radius:4px;background:none;color:var(--ui-text-tertiary);font:inherit;font-size:.6875rem;cursor:pointer}
+.hi-open-ide:hover{background:var(--ui-control-hover-background);color:var(--ui-text-primary)}
 .hi-card:hover{background:var(--ui-row-hover-background)}
 `;
 function Styles() {
@@ -1088,6 +1260,43 @@ function isLight(color) {
   let scale = resolved.startsWith("color(") ? 255 : 1, [r, g, b] = nums.slice(0, 3).map((v) => v * scale);
   return 0.2126 * r + 0.7152 * g + 0.0722 * b > 140;
 }
+function IdeLayout() {
+  let hidden = useValue($explorerHidden), [userWidth, setUserWidth] = useState(() => {
+    let saved = Number(ctx.storage.get("explorerWidth", 0));
+    return saved >= 160 && saved <= 900 ? saved : null;
+  }), [viewport, setViewport] = useState(window.innerWidth);
+  useEffect(() => ctx.addEventListener(window, "resize", () => setViewport(window.innerWidth)), []);
+  let width = userWidth ?? columnPlan(viewport).explorer, [drag, setDrag] = useState(!1), widthRef = useRef(width);
+  return widthRef.current = width, /* @__PURE__ */ jsxs("div", { className: "hi-ide", "data-drag": drag, children: [
+    /* @__PURE__ */ jsx(Styles, {}),
+    !hidden && /* @__PURE__ */ jsxs(Fragment2, { children: [
+      /* @__PURE__ */ jsx("div", { className: "hi-ide-side", style: { width }, children: /* @__PURE__ */ jsx(Sidebar, {}) }),
+      /* @__PURE__ */ jsx(
+        "div",
+        {
+          className: "hi-ide-sash",
+          onDoubleClick: () => {
+            setUserWidth(null), ctx.storage.remove("explorerWidth");
+          },
+          onPointerDown: (e) => {
+            if (e.button !== 0) return;
+            e.preventDefault();
+            let x0 = e.clientX, w0 = widthRef.current;
+            setDrag(!0);
+            let move = (ev) => setUserWidth(Math.round(Math.min(900, Math.max(160, w0 + ev.clientX - x0)))), up = () => {
+              window.removeEventListener("pointermove", move, !0), window.removeEventListener("pointerup", up, !0), setDrag(!1), ctx.storage.set("explorerWidth", widthRef.current);
+            };
+            window.addEventListener("pointermove", move, !0), window.addEventListener("pointerup", up, !0);
+          },
+          role: "separator",
+          title: "Drag to resize the Explorer; double-click to reset"
+        }
+      )
+    ] }),
+    /* @__PURE__ */ jsx("div", { className: "hi-ide-main", children: /* @__PURE__ */ jsx(EditorPane, {}) }),
+    /* @__PURE__ */ jsx(Dialogs, {})
+  ] });
+}
 function EditorPane() {
   let tabs = useValue($tabs), active = useValue($active), banners = useValue($banners), confirmClose = useValue($confirmClose), accent = useValue($accentOverride), frameRef = useRef(null);
   useEffect(() => {
@@ -1292,8 +1501,8 @@ function FolderDialog() {
   ] }) });
 }
 function StatusItem() {
-  let cursor = useValue($cursor);
-  return !useValue($active) || !cursor ? null : /* @__PURE__ */ jsxs("span", { className: "hi-status", children: [
+  let cursor = useValue($cursor), active = useValue($active);
+  return IDE_WINDOW ? !active || !cursor ? null : /* @__PURE__ */ jsxs("span", { className: "hi-status", children: [
     /* @__PURE__ */ jsx(Styles, {}),
     /* @__PURE__ */ jsxs("span", { children: [
       "Ln ",
@@ -1304,6 +1513,10 @@ function StatusItem() {
     ] }),
     /* @__PURE__ */ jsx("span", { children: cursor.eol }),
     /* @__PURE__ */ jsx("span", { children: cursor.lang })
+  ] }) : /* @__PURE__ */ jsxs("button", { className: "hi-open-ide", onClick: () => void openIdeWindow(), title: "Open this chat in the Hermes IDE window (Ctrl+Alt+I)", children: [
+    /* @__PURE__ */ jsx(Styles, {}),
+    icon("code"),
+    /* @__PURE__ */ jsx("span", { children: "IDE" })
   ] });
 }
 function SettingsPage() {
@@ -1344,22 +1557,9 @@ var PLUGIN_ID = "hermes-ide", plugin_default = {
   id: PLUGIN_ID,
   name: "Hermes IDE",
   register(ctx2) {
-    bindContext(ctx2, () => /* @__PURE__ */ jsx2(EditorPane, {})), loadSettings();
+    bindContext(ctx2, () => /* @__PURE__ */ jsx2(IdeLayout, {})), loadSettings();
     let area = (name, fallback) => sdk[name] ?? fallback;
     ctx2.registerMany([
-      {
-        id: "explorer",
-        area: area("PANES_AREA", "panes"),
-        title: "Explorer",
-        data: { placement: "left", width: "280px" },
-        render: () => /* @__PURE__ */ jsx2(Sidebar, {})
-      },
-      {
-        id: "dialogs",
-        area: sdk.TITLEBAR_AREAS?.left ?? "titleBar.left",
-        order: 9999,
-        render: () => /* @__PURE__ */ jsx2(Dialogs, {})
-      },
       {
         id: "status",
         area: sdk.STATUSBAR_AREAS?.right ?? "statusBar.right",
@@ -1372,11 +1572,39 @@ var PLUGIN_ID = "hermes-ide", plugin_default = {
         data: { name: "hermes-ide-open", render: (props) => /* @__PURE__ */ jsx2(OpenCard, { attrs: props.attrs }) }
       }
     ]);
-    let commands = [
-      { id: "show", label: "IDE: Show IDE Layout", keys: ["mod+alt+i"], run: showIde, keywords: ["ide", "editor", "cursor", "code"] },
+    let registerCommands = (commands) => {
+      for (let c of commands)
+        ctx2.register({
+          id: `palette-${c.id}`,
+          area: area("PALETTE_AREA", "palette"),
+          data: { id: `${PLUGIN_ID}.${c.id}`, label: c.label, keywords: c.keywords, action: c.keys ? `${PLUGIN_ID}.${c.id}` : void 0, run: c.run }
+        }), c.keys && ctx2.register({
+          id: `key-${c.id}`,
+          area: area("KEYBINDS_AREA", "keybinds"),
+          data: { id: `${PLUGIN_ID}.${c.id}`, label: c.label, category: "view", defaults: c.keys, run: c.run }
+        });
+    };
+    if (ctx2.registerSettingsPage?.({ id: "settings", title: "Hermes IDE", icon: "code", render: () => /* @__PURE__ */ jsx2(SettingsPage, {}) }), ctx2.addEventListener(window, "storage", onStorageRequest), !IDE_WINDOW) {
+      registerCommands([
+        {
+          id: "show",
+          label: "IDE: Open in IDE Window",
+          keys: ["mod+alt+i"],
+          run: () => void openIdeWindow(),
+          keywords: ["ide", "editor", "cursor", "code", "popout", "window"]
+        }
+      ]), ctx2.onEvent(`plugin.${PLUGIN_ID}.open`, (ev) => {
+        let p = ev?.payload ?? {}, focused = host3.state.focusedStoredSessionId.get();
+        typeof p.path == "string" && p.path && p.session_id && p.session_id === focused && openIdeWindow({ path: p.path, line: Number(p.line) > 0 ? Number(p.line) : void 0 });
+      }), ctx2.storage.get("welcomed-v2", !1) || (ctx2.storage.set("welcomed-v2", !0), notify("info", "Press Ctrl+Alt+I, or click IDE in the status bar, to open this chat in its own IDE window.", "Hermes IDE"));
+      return;
+    }
+    registerCommands([
+      { id: "show", label: "IDE: Show IDE", keys: ["mod+alt+i"], run: showIde, keywords: ["ide", "editor", "cursor", "code"] },
       { id: "quickOpen", label: "IDE: Go to File\u2026", keys: ["mod+alt+p"], run: () => $quickOpen.set(!0), keywords: ["quick open", "file"] },
       { id: "findInFiles", label: "IDE: Search in Files", keys: ["mod+alt+f"], run: () => revealSidebar("search"), keywords: ["grep", "find"] },
       { id: "explorer", label: "IDE: Show Explorer", keys: ["mod+alt+e"], run: () => revealSidebar("explorer") },
+      { id: "toggleExplorer", label: "IDE: Toggle Explorer", run: () => runCommand("toggleSidebar") },
       { id: "scm", label: "IDE: Show Source Control", run: () => revealSidebar("scm"), keywords: ["git"] },
       { id: "openFolder", label: "IDE: Open Folder\u2026", run: () => $folderDialog.set(!0), keywords: ["workspace", "project"] },
       { id: "saveAll", label: "IDE: Save All", run: saveAll },
@@ -1394,23 +1622,12 @@ var PLUGIN_ID = "hermes-ide", plugin_default = {
         },
         keywords: ["preview", "render"]
       }
-    ];
-    for (let c of commands)
-      ctx2.register({
-        id: `palette-${c.id}`,
-        area: area("PALETTE_AREA", "palette"),
-        data: { id: `${PLUGIN_ID}.${c.id}`, label: c.label, keywords: c.keywords, action: c.keys ? `${PLUGIN_ID}.${c.id}` : void 0, run: c.run }
-      }), c.keys && ctx2.register({
-        id: `key-${c.id}`,
-        area: area("KEYBINDS_AREA", "keybinds"),
-        data: { id: `${PLUGIN_ID}.${c.id}`, label: c.label, category: "view", defaults: c.keys, run: c.run }
-      });
-    ctx2.registerSettingsPage?.({ id: "settings", title: "Hermes IDE", icon: "code", render: () => /* @__PURE__ */ jsx2(SettingsPage, {}) }), ctx2.onEvent(`plugin.${PLUGIN_ID}.open`, (ev) => {
+    ]);
+    let sid = windowSessionId();
+    ctx2.onEvent(`plugin.${PLUGIN_ID}.open`, (ev) => {
       let p = ev?.payload ?? {};
-      typeof p.path == "string" && p.path && openFile(p.path, { line: Number(p.line) > 0 ? Number(p.line) : void 0 });
-    }), ctx2.onEvent("tool.complete", onToolComplete), ctx2.onEvent("message.complete", () => void applyPendingCwd()), ctx2.addEventListener(window, "focus", () => scheduleRefresh()), ctx2.onDispose(host3.state.focusedStoredSessionId.subscribe((id) => void switchSession(id))), ctx2.onDispose(host3.state.cwd.subscribe(() => void syncRoot())), ctx2.onDispose(disposeEditor), syncRoot().then(() => {
-      ctx2.storage.get("welcomed", !1) || (ctx2.storage.set("welcomed", !0), notify("info", 'Hermes IDE is on. Run "IDE: Show IDE Layout" (Ctrl+Alt+I) from the command palette.', "Hermes IDE"));
-    });
+      typeof p.path == "string" && p.path && (!p.session_id || p.session_id === sid) && openFile(p.path, { line: Number(p.line) > 0 ? Number(p.line) : void 0 });
+    }), ctx2.onEvent("tool.complete", onToolComplete), ctx2.onEvent("message.complete", () => void applyPendingCwd()), ctx2.addEventListener(window, "focus", () => scheduleRefresh()), ctx2.onDispose(host3.state.focusedStoredSessionId.subscribe((id) => void switchSession(id || sid))), ctx2.onDispose(host3.state.cwd.subscribe(() => void syncRoot())), ctx2.onDispose(disposeEditor), watchPreviews(), setupIdeWindow();
   }
 };
 export {

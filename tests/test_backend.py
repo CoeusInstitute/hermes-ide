@@ -163,4 +163,8 @@ def test_ide_open_tool_broadcasts(monkeypatch, tmp_path):
     f.write_text("print(1)\n")
     out = json.loads(plugin.handle_ide_open({"path": str(f), "line": 3}))
     assert out["success"] and sent[0][:2] == ("hermes-ide", "open") and sent[0][2]["line"] == 3
+    assert "session_id" not in sent[0][2]
+    # The session id lets the right Desktop window (that chat's IDE window) act on it.
+    plugin.handle_ide_open({"path": str(f)}, session_id="s-123")
+    assert sent[1][2]["session_id"] == "s-123"
     assert json.loads(plugin.handle_ide_open({"path": str(tmp_path / "missing.py")}))["success"] is False

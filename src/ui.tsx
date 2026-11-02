@@ -21,7 +21,7 @@ import {
   ToggleRow,
   useValue
 } from '@hermes/plugin-sdk'
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, type PointerEvent as ReactPointerEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import FRAME_HTML from 'virtual:frame-html'
 
@@ -43,12 +43,15 @@ import {
   $tabs,
   $treeVersion,
   $view,
+  $explorerHidden,
+  IDE_WINDOW,
   activate,
   addToChat,
   attachFrame,
   bumpTree,
   call,
   closeTab,
+  columnPlan,
   ctx,
   detachFrame,
   type Entry,
@@ -57,6 +60,7 @@ import {
   notify,
   onFrameMessage,
   openFile,
+  openIdeWindow,
   openInBrowser,
   post,
   postLook,
@@ -122,6 +126,15 @@ const STYLES = `
 .hi-qo-row[data-on=true]{background:var(--ui-row-active-background);color:var(--ui-text-primary)}
 .hi-status{display:inline-flex;gap:10px;align-items:center;padding:0 6px;font-size:.6875rem;color:var(--ui-text-tertiary);white-space:nowrap}
 .hi-card{display:inline-flex;align-items:center;gap:8px;margin:4px 0;padding:6px 10px;border:1px solid var(--ui-stroke-secondary);border-radius:8px;font-size:12.5px;color:var(--ui-text-primary);background:none;cursor:pointer;font-family:var(--font-mono)}
+.hi-ide{display:flex;height:100%;min-height:0;min-width:0}
+.hi-ide-side{flex:none;min-width:0;height:100%;border-right:1px solid var(--ui-stroke-tertiary)}
+.hi-ide-main{flex:1;min-width:0;height:100%}
+.hi-ide-sash{flex:none;width:5px;margin:0 -3px 0 -2px;z-index:2;cursor:col-resize;position:relative}
+.hi-ide-sash:hover,.hi-ide[data-drag=true] .hi-ide-sash{background:color-mix(in srgb,var(--ui-accent) 45%,transparent)}
+.hi-ide[data-drag=true]{cursor:col-resize;user-select:none}
+.hi-ide[data-drag=true] iframe{pointer-events:none}
+.hi-open-ide{display:inline-flex;align-items:center;gap:4px;height:18px;padding:0 6px;border:0;border-radius:4px;background:none;color:var(--ui-text-tertiary);font:inherit;font-size:.6875rem;cursor:pointer}
+.hi-open-ide:hover{background:var(--ui-control-hover-background);color:var(--ui-text-primary)}
 .hi-card:hover{background:var(--ui-row-hover-background)}
 `
 
@@ -660,6 +673,68 @@ function isLight(color: string | undefined) {
   return 0.2126 * r + 0.7152 * g + 0.0722 * b > 140
 }
 
+/** The IDE tile in the IDE window: Explorer | Editor, with its own resizable seam. The chat sits to
+ *  the right in the app's own pane, so the IDE never renders a chat of its own. */
+export function IdeLayout() {
+  const hidden = useValue($explorerHidden)
+  // Until the user drags the seam, the Explorer follows the window (the pop-out opens at 420px
+  // and is maximized a moment later).
+  const [userWidth, setUserWidth] = useState<number | null>(() => {
+    const saved = Number(ctx.storage.get('explorerWidth', 0))
+    return saved >= 160 && saved <= 900 ? saved : null
+  })
+  const [viewport, setViewport] = useState(window.innerWidth)
+  useEffect(() => ctx.addEventListener(window, 'resize', () => setViewport(window.innerWidth)), [])
+  const width = userWidth ?? columnPlan(viewport).explorer
+  const [drag, setDrag] = useState(false)
+  const widthRef = useRef(width)
+  widthRef.current = width
+
+  const startDrag = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return
+    e.preventDefault()
+    const x0 = e.clientX
+    const w0 = widthRef.current
+    setDrag(true)
+    const move = (ev: PointerEvent) => setUserWidth(Math.round(Math.min(900, Math.max(160, w0 + ev.clientX - x0))))
+    const up = () => {
+      window.removeEventListener('pointermove', move, true)
+      window.removeEventListener('pointerup', up, true)
+      setDrag(false)
+      ctx.storage.set('explorerWidth', widthRef.current)
+    }
+    window.addEventListener('pointermove', move, true)
+    window.addEventListener('pointerup', up, true)
+  }
+
+  return (
+    <div className="hi-ide" data-drag={drag}>
+      <Styles />
+      {!hidden && (
+        <>
+          <div className="hi-ide-side" style={{ width }}>
+            <Sidebar />
+          </div>
+          <div
+            className="hi-ide-sash"
+            onDoubleClick={() => {
+              setUserWidth(null)
+              ctx.storage.remove('explorerWidth')
+            }}
+            onPointerDown={startDrag}
+            role="separator"
+            title="Drag to resize the Explorer; double-click to reset"
+          />
+        </>
+      )}
+      <div className="hi-ide-main">
+        <EditorPane />
+      </div>
+      <Dialogs />
+    </div>
+  )
+}
+
 export function EditorPane() {
   const tabs = useValue($tabs)
   const active = useValue($active)
@@ -959,6 +1034,15 @@ function FolderDialog() {
 export function StatusItem() {
   const cursor = useValue($cursor)
   const active = useValue($active)
+  if (!IDE_WINDOW) {
+    return (
+      <button className="hi-open-ide" onClick={() => void openIdeWindow()} title="Open this chat in the Hermes IDE window (Ctrl+Alt+I)">
+        <Styles />
+        {icon('code')}
+        <span>IDE</span>
+      </button>
+    )
+  }
   if (!active || !cursor) return null
   return (
     <span className="hi-status">

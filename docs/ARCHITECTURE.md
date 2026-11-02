@@ -3,21 +3,21 @@
 ## Shape
 
 ```
-Hermes Desktop window (renderer)                                     Hermes gateway (agent machine)
-┌──────────────────────────────────────────────────────────────┐     ┌───────────────────────────────┐
-│ Sessions │ Explorer pane     │ Editor tile        │ Session   │     │ /api/plugins/hermes-ide/*     │
-│ (core)   │ (plugin)          │ (plugin)           │ chat      │     │  dashboard/plugin_api.py      │
-│          │  Explorer         │  tabs, breadcrumbs │ (core,    │◄───►│  fs list/read/stat/write      │
-│          │  Search           │  review banner     │  reused)  │rest │  create/rename/trash          │
-│          │  Source Control   │ ┌────────────────┐ │           │     │  files (rg), search (rg)      │
-│          │                   │ │ sandboxed      │ │ composer ◄┼─┐   │  git status, git HEAD text    │
-│          │                   │ │ srcdoc iframe: │ │           │ │   ├───────────────────────────────┤
-│          │                   │ │ CodeMirror 6   │ │           │ │   │ agent half: ide_open tool ────┼─┐
-│          │                   │ └───────▲────────┘ │           │ │   └───────────────────────────────┘ │
-│          │                   │   postMessage      │  Browser  │ │       plugin.hermes-ide.open event  │
-│ Terminal (core) · Review (core) · Browser + Annotate (core)    │ │◄──────────────────────────────────────┘
-└────────────────────────────────────────────────────────────────┘ │
-            host.composer.insertText / submit ─────────────────────┘
+Main Hermes Desktop window                    IDE window: the app's single-session pop-out, claimed by the plugin
+┌───────────────────────────────────┐         ┌───────────────────────────────────────────────────────────────────────┐
+│ Sessions │ Session chat (core)    │ Ctrl+   │ IDE tile (plugin)                        │ Session chat  │ Preview +     │
+│ (core)   │                        │ Alt+I   │ ┌──────────┬──────────────────────────┐  │ (core, the    │ Annotate      │
+│          │                        │ ──────► │ │ Explorer │ tabs, breadcrumbs, review│  │  same session │ (core, docked │
+│          │                        │ IDE     │ │ Search   │ ┌──────────────────────┐ │  │  as the main  │  by the app)  │
+│          │                        │ button  │ │ Source   │ │ sandboxed srcdoc     │ │  │  window)      │               │
+│          │ status bar: [IDE]      │         │ │ Control  │ │ iframe: CodeMirror 6 │ │  │  composer ◄───┼─ Ctrl+L,      │
+└───────────────────────────────────┘         │ │          │ └──────────▲───────────┘ │  │               │  Ctrl+K       │
+   window.hermesDesktop.openSessionWindow     │ └──────────┴────postMessage──────────┘  │               │               │
+   + localStorage open request                └───────────────────────────────────────────────────────────────────────┘
+                                                        │ ctx.rest                                 ▲ plugin.hermes-ide.open
+                                                        ▼                                          │ (carries session_id)
+                                    Hermes gateway (agent machine): /api/plugins/hermes-ide/*  ·  agent half: ide_open tool
+                                    fs list/read/stat/write, create/rename/trash, rg files/search, git status/HEAD text
 ```
 
 The plugin is one package with three halves:
@@ -30,29 +30,37 @@ The plugin is one package with three halves:
 
 ## What is reused, mirrored and added
 
-**Reused, never duplicated.** The session chat and its composer, the Sessions sidebar, the terminal, the Review pane, the Browser with Annotate, the command palette, the theme system, the folder picker, file reference chips (`@file:`), and the agent's own file tools.
+**Reused, never duplicated.** The session chat and its composer, the single-session pop-out window, the terminal, the Review pane, the Browser with Annotate, the command palette, the theme system, the folder picker, file reference chips (`@file:`), and the agent's own file tools.
 
 **Mirrored.** The IDE subscribes to Desktop state and follows it:
 
 | Desktop state | SDK door | IDE behavior |
 |---|---|---|
-| Focused chat | `host.state.focusedStoredSessionId` | Swap to that chat's tab set (`tabs:<storedId>` in plugin storage); keep dirty tabs open |
+| The window's chat | `#/<storedId>` route of the pop-out, `host.state.focusedStoredSessionId` | Load that chat's tab set (`tabs:<storedId>` in plugin storage); an IDE window never switches chats |
 | Chat folder | `host.state.cwd`, `session.cwd.set` | Explorer root follows it; Open Folder moves the chat |
 | Agent tool calls | `ctx.onEvent('tool.complete')` | Re-stat open files; reload changed ones with an inline review diff |
 | Turn end | `ctx.onEvent('message.complete')` | Apply a folder chosen while the chat was a draft |
 | Theme, mode, accent, fonts | computed `--ui-*`, `--font-*` tokens, `$accentOverride`, `@font-face` rules | Re-sent to the editor frame after each repaint settles |
 | Agent requests | `ctx.onEvent('plugin.hermes-ide.open')` | Open the file at the line |
 
-**Added.** Explorer, Search and Source Control views, the editor, Quick Open, the Open Folder dialog, the review and conflict banners, the status item, commands, keybinds, the settings page, the transcript card, the backend routes and the `ide_open` tool.
+**Added.** The IDE window role (claiming a pop-out, maximizing it, hiding its session list, sizing its columns), Explorer, Search and Source Control views, the editor, Quick Open, the Open Folder dialog, the review and conflict banners, the status item, commands, keybinds, the settings page, the transcript card, the backend routes and the `ide_open` tool.
+
+## The IDE window
+
+Opening: the main window writes `hermes-ide:open-window = {sid, at, path?, line?}` to localStorage and calls `window.hermesDesktop.openSessionWindow(sid, {profile, connectionId})`, the same door the app's "Open in new window" uses. The app opens (or re-fronts) one pop-out per chat, at `index.html?win=secondary…#/<sid>`.
+
+Claiming: the plugin copy in that pop-out reads the request at load. If the request names its chat and is under a minute old, it removes the request and sets `hermes-ide:window` in sessionStorage, so a reload of that window stays an IDE window. A plain pop-out that already exists gets the request through a `storage` event and reloads itself as the IDE. A plain pop-out asking for itself (its own IDE button) converts directly, because a window never receives its own storage events.
+
+Layout: the window maximizes once (`windowControls.toggleMaximize`), opens the IDE tile with `host.openWorkspace` docked left of the chat, hides the app's session list with `view.toggleSidebar` (pop-out layout state is memory-only, so the main window's sidebar is untouched), and sizes the columns from `columnPlan(width)` in `util.ts`. The SDK has no door to size a split, so `dragSeam` drags the app's own sash with synthetic pointer events; `tree-split.tsx` accepts them, clamps every zone to its floor and commits once on release. A preview docked right of the chat is fitted once per zone to about a third of the window, taking or giving space from the editor; a closed preview hands its space back to the editor. A `MutationObserver` triggers that fit only when the number of layout zones changes, so a streaming chat costs one `querySelectorAll` per mutation batch.
 
 ## Source map
 
 | File | Responsibility |
 |---|---|
-| `src/plugin.tsx` | `register(ctx)`: contributions, commands, keybinds, settings page, event subscriptions |
-| `src/core.ts` | State (nanostores atoms) and actions: backend calls, tab model, save and conflict logic, agent-edit review, per-session state, chat wiring, the frame bridge |
-| `src/ui.tsx` | Views: Sidebar (Explorer, Search, Source Control), EditorPane, dialogs, status item, settings page, transcript card |
-| `src/util.ts` | Pure helpers: paths, `@file` reference formatting, fuzzy ranking, tool-argument path extraction (unit tested) |
+| `src/plugin.tsx` | `register(ctx)`: decides the window role (main or IDE window), then registers that role's contributions, commands, keybinds and event subscriptions |
+| `src/core.ts` | State (nanostores atoms) and actions: the IDE window (open request, claim, maximize, column fitting by seam drag, preview fitting), backend calls, tab model, save and conflict logic, agent-edit review, per-session state, chat wiring, the frame bridge |
+| `src/ui.tsx` | Views: IdeLayout (Explorer and Editor with their own seam, plus the dialogs), Sidebar (Explorer, Search, Source Control), EditorPane, status item (the IDE button in the main window), settings page, transcript card |
+| `src/util.ts` | Pure helpers: paths, `@file` reference formatting, fuzzy ranking, tool-argument path extraction, the column plan (unit tested) |
 | `src/frame/editor.ts` | The editor document: CodeMirror setup, languages, theme from tokens, inline edit panel, context menu, the frame side of the protocol |
 | `dev/build.mjs` | Bundles the frame to an IIFE, inlines it as the iframe `srcdoc`, bundles the plugin to one ESM file, and fails the build if any import other than the three allowed specifiers remains |
 | `dashboard/plugin_api.py` | Backend routes |
