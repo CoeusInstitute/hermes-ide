@@ -41,7 +41,7 @@ A terminal install enables the agent half only. Restart Hermes Desktop if it was
 
 | | Catalog build | Full build |
 |---|---|---|
-| Where | a tagged commit per release (`catalog-v0.6.1`), pinned by the Hermes plugin catalog | `main` (what **Install from Git** gets) |
+| Where | a tagged commit per release (`catalog-v0.6.2`), pinned by the Hermes plugin catalog | `main` (what **Install from Git** gets) |
 | Surface | the Desktop plugin SDK only: passes `hermes plugins validate` | the SDK plus a few reads of the app's own markup |
 | Explorer | a resizable panel inside the Editor column | its own column |
 | Project UI | a **Run** view beside Explorer, Search and Source Control; the page opens in the app's Browser pane | a Browser column of its own (address bar, DevTools, the page) |
@@ -149,7 +149,7 @@ What the plugin does on your machines, so you can decide before installing:
 - **Agent context.** The `pre_llm_call` hook adds the [Hermes IDE] note above to turns of chats whose IDE window is open. To know which chats those are, an open IDE window writes its chat's ids and a timestamp to `plugin-data/hermes-ide/ide-sessions.json` in your Hermes home every minute; nothing else is stored there.
 - **Network.** None to third parties. The plugin talks only to your Hermes gateway and to the dev servers it starts on your machine.
 - **Credentials, telemetry.** The plugin stores no credentials and sends no telemetry or usage data.
-- **Install scan.** Installing from Git shows the scanner's `caution` prompt: 35 high findings, all one rule (`inline_shell_exec`, meant for `SKILL.md` bodies) matching data strings in CodeMirror's bundled grammar tables, plus medium and low notes. None is in the plugin's own code; [docs/CATALOG-SUBMISSION.md](docs/CATALOG-SUBMISSION.md) lists every finding. Installs from the Hermes plugin catalog, at its reviewed commit, accept `caution` without a prompt.
+- **Install scan.** Hermes' install scanner rates the plugin `safe`: no critical or high finding, so installing from Git needs no confirmation. Its medium and low notes (character handling inside the bundled CodeMirror, the backend's subprocess calls, test fixtures) are listed in [docs/CATALOG-SUBMISSION.md](docs/CATALOG-SUBMISSION.md).
 - **Desktop surface.** The catalog build stays inside the Desktop plugin SDK, with one exception: a single call to the app's own title-bar maximize (`window.hermesDesktop.windowControls.toggleMaximize`), because the SDK has no window verb and an IDE does not fit the app's 420 px pop-out. The full build also reads the app's pane and session-list markup for the features in the table above.
 
 ## Known limits

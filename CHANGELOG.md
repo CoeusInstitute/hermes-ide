@@ -2,6 +2,11 @@
 
 All notable changes to Hermes IDE. Versions follow the `version` in `plugin.yaml`.
 
+## 0.6.2 (2026-11-02)
+
+- **The install scan is `safe`, so installing from Git no longer asks or blocks.** The editor's Lezer grammars carried their parse tables as packed strings, and Hermes' scanner read 35 of them as inline-shell snippets (high), which made a fresh Git install impossible without `--force`. The build now decodes those tables into the integer arrays the parser builds from them at startup anyway (`dev/lezer-tables.mjs`). Every grammar's tables and parse trees are tested against the package's own (`tests/lezer-tables.test.mjs`), and syntax highlighting through the bundled path was compared span by span for TSX, JavaScript, CSS, HTML, Python, JSON, Rust and YAML. Scan: 0 critical, 0 high, 121 medium or low notes.
+- The bundle grows from about 1.8 MB to 2.6 MB (decimal arrays are larger than packed strings).
+
 ## 0.6.1 (2026-11-02)
 
 Security-scan hygiene for the catalog review. No change in behavior.

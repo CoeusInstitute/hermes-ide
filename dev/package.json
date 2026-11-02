@@ -1,6 +1,6 @@
 {
   "name": "hermes-ide",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "private": true,
   "description": "Cursor-style IDE plugin for Hermes Desktop",
   "license": "MIT",
@@ -9,7 +9,7 @@
     "build": "node build.mjs",
     "build:full": "node build.mjs --target=full",
     "watch": "node build.mjs --watch",
-    "test": "node --test ../tests/util.test.mjs"
+    "test": "node --test ../tests/util.test.mjs ../tests/lezer-tables.test.mjs"
   },
   "devDependencies": {
     "@codemirror/autocomplete": "^6.18.6",

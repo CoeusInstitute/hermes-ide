@@ -15,9 +15,12 @@
 //   npm run watch                          rebuild on change
 
 import { build, context } from 'esbuild'
+import { readFile } from 'node:fs/promises'
 import { statSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+
+import { decodeLezerTables } from './lezer-tables.mjs'
 
 // Dev tooling lives in dev/ so the installed plugin carries no package.json (Hermes would offer
 // to npm-install it). Paths below are relative to the repository root.
@@ -82,6 +85,20 @@ const framePlugin = {
   }
 }
 
+// Lezer grammars carry their parse tables as packed strings that the parser decodes at startup;
+// the bundle gets them already decoded, as plain integer arrays (dev/lezer-tables.mjs, checked by
+// tests/lezer-tables.test.mjs).
+const lezerTables = {
+  name: 'lezer-tables',
+  setup(b) {
+    b.onLoad({ filter: /[\\/]node_modules[\\/]@(?:lezer|codemirror)[\\/][^\\/]+[\\/]dist[\\/]index\.js$/ }, async args => {
+      const src = await readFile(args.path, 'utf8')
+      const out = decodeLezerTables(src)
+      return out === src ? undefined : { contents: out, loader: 'js', resolveDir: dirname(args.path) }
+    })
+  }
+}
+
 // The bundle's real imports, from esbuild's own metafile (a text scan would trip over source that
 // merely mentions the word import, such as a language's keyword list).
 const checkImports = {
@@ -119,7 +136,7 @@ const options = {
   // import) are dropped from the catalog bundle, not just skipped at run time.
   define: { __CATALOG__: String(CATALOG) },
   banner: { js: `// Hermes IDE desktop plugin (${targetArg} build). Built from src/ by dev/build.mjs; do not edit by hand.` },
-  plugins: [framePlugin, checkImports]
+  plugins: [lezerTables, framePlugin, checkImports]
 }
 
 if (watch) {
