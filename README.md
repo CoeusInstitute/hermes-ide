@@ -7,7 +7,7 @@
 <p align="center">
   <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/version-0.6.3-6366f1?style=flat-square" alt="Version 0.6.3"></a>
   <a href="https://hermes-agent.nousresearch.com/docs/user-guide/desktop"><img src="https://img.shields.io/badge/Hermes-%E2%89%A50.22.5-4b5280?style=flat-square" alt="Requires Hermes 0.22.5 or newer"></a>
-  <a href="https://github.com/CoeusInstitute/hermes-ide/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/CoeusInstitute/hermes-ide/ci.yml?branch=main&style=flat-square&label=CI" alt="CI status"></a>
+  <a href="https://github.com/CoeusInstitute/hermes-ide/actions/workflows/ci.yml"><img src="https://github.com/CoeusInstitute/hermes-ide/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI status"></a>
   <a href="#security-and-privacy"><img src="https://img.shields.io/badge/install%20scan-safe-2f8a57?style=flat-square" alt="Install scan: safe"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-4b5280?style=flat-square" alt="MIT license"></a>
 </p>
