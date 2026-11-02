@@ -107,4 +107,14 @@ Alternatives considered:
 | Monaco instead of CodeMirror | Needs web workers and AMD loading that the single-file loader does not support; CodeMirror 6 bundles cleanly and the app already uses it |
 | Editor in the app DOM | Loses the editing keys to the app's global shortcuts (constraint 2) |
 | `ctx.files` (desktop-side, per-folder grants) for files | No search, no git, refuses `.env`-like names, and reads the Desktop machine instead of the agent's machine on a remote backend |
-| A plugin-owned `<webview>` browser | Bypasses the Desktop's per-origin consent for page scripts and duplicates the Browser that already has Annotate |
+| A plugin-owned `<webview>` browser | Rejected for v0.1 and v0.2: it bypasses the Desktop's per-origin consent for page scripts and duplicates the Browser that already has Annotate. **Adopted in v0.3** (see below) |
+
+## v0.3 revision: the IDE's own Browser column (2026-11-02)
+
+Michai's v0.2 review asked for the IDE to find a project's UI, run it and open it in the browser automatically, and for every column (browser included) to be movable by dragging. Neither is possible with the Desktop Browser from a plugin: no SDK door opens or navigates a Browser tab (`preview.open` reaches a window only during that session's running turn), and the core preview docks where the app puts it. The v0.1 reasons against an own `<webview>` were weighed again:
+
+- **Per-origin consent for page scripts.** The Desktop asks before its Browser runs agent scripts on a site. The IDE's webview runs exactly one script, the element picker, and only when the user presses the picker button, on the page the user is looking at (normally their own dev server). That is the user's own action, not an agent's.
+- **Duplicating Annotate.** The picker is smaller than Annotate (no notes, no screenshot) but adds what Annotate lacks for development: the likely source lines of the picked element.
+
+So v0.3 adds a Browser column with a `<webview>` on its own partition (`persist:hermes-ide`, outside the preview partition's preload and guest rules), and keeps the Desktop Browser untouched for everything else. The dev server itself runs in the backend, which derives the command from the project's files and asks the user once per project before running its code (Cursor and VS Code call this Workspace Trust).
+

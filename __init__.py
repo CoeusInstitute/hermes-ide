@@ -21,16 +21,17 @@ IDE_OPEN_SCHEMA: dict[str, Any] = {
     "name": "ide_open",
     "description": (
         "Open a file in the Hermes IDE editor inside the Hermes Desktop app, optionally at a line, so the "
-        "user can see or edit it. Use when the user asks to open, show or jump to a file or line in the "
-        "IDE/editor. Pass an absolute path, or a path relative to the session's working directory."
+        "user can see or edit it, or open a web page (such as the dev server you just started) in the IDE's "
+        "Browser column. Use when the user asks to open, show or jump to a file, a line or a running UI in "
+        "the IDE. Pass an absolute path or one relative to the session's working directory, or an http(s) url."
     ),
     "parameters": {
         "type": "object",
         "properties": {
             "path": {"type": "string", "description": "File path (absolute, or relative to the working directory)."},
             "line": {"type": "integer", "description": "1-based line to reveal.", "minimum": 1},
+            "url": {"type": "string", "description": "http(s) URL to show in the IDE Browser, e.g. http://localhost:5173/."},
         },
-        "required": ["path"],
         "additionalProperties": False,
     },
 }
@@ -50,15 +51,23 @@ def _resolve(path: str, task_id: str) -> str:
 
 def handle_ide_open(args: dict[str, Any], **kw: Any) -> str:
     raw = args.get("path")
-    if not isinstance(raw, str) or not raw.strip():
-        return json.dumps({"success": False, "error": "path is required"})
-    path = _resolve(raw, str(kw.get("task_id") or "default"))
-    if not os.path.isfile(path):
-        return json.dumps({"success": False, "error": f"not a file: {path}"})
-    line = args.get("line")
-    payload: dict[str, Any] = {"path": path}
-    if isinstance(line, int) and line > 0:
-        payload["line"] = line
+    url = args.get("url")
+    payload: dict[str, Any] = {}
+    if isinstance(url, str) and url.strip():
+        url = url.strip()
+        if not url.lower().startswith(("http://", "https://")) or len(url) > 2048:
+            return json.dumps({"success": False, "error": "url must be an http(s) URL"})
+        payload["url"] = url
+    elif not isinstance(raw, str) or not raw.strip():
+        return json.dumps({"success": False, "error": "pass a path or a url"})
+    else:
+        path = _resolve(raw, str(kw.get("task_id") or "default"))
+        if not os.path.isfile(path):
+            return json.dumps({"success": False, "error": f"not a file: {path}"})
+        payload["path"] = path
+        line = args.get("line")
+        if isinstance(line, int) and line > 0:
+            payload["line"] = line
     if kw.get("session_id"):
         payload["session_id"] = str(kw["session_id"])
     try:

@@ -168,3 +168,138 @@ def test_ide_open_tool_broadcasts(monkeypatch, tmp_path):
     plugin.handle_ide_open({"path": str(f)}, session_id="s-123")
     assert sent[1][2]["session_id"] == "s-123"
     assert json.loads(plugin.handle_ide_open({"path": str(tmp_path / "missing.py")}))["success"] is False
+    # A url opens in the IDE Browser; only http(s) is accepted.
+    out = json.loads(plugin.handle_ide_open({"url": "http://localhost:5173/"}, session_id="s-9"))
+    assert out["success"] and sent[-1][2] == {"url": "http://localhost:5173/", "session_id": "s-9"}
+    assert json.loads(plugin.handle_ide_open({"url": "file:///etc/passwd"}))["success"] is False
+    assert json.loads(plugin.handle_ide_open({}))["success"] is False
+
+
+# ── project UI detection and dev servers ───────────────────────────────────────────────────
+
+
+def _pkg(d: Path, scripts: dict, dev: dict | None = None, deps: dict | None = None, **extra) -> Path:
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "package.json").write_text(json.dumps({"name": d.name, "scripts": scripts, "devDependencies": dev or {},
+                                                "dependencies": deps or {}, **extra}))
+    return d
+
+
+def test_detects_node_uis_static_sites_and_managers(client, tmp_path):
+    root = _pkg(tmp_path / "app", {"dev": "vite", "build": "vite build"}, {"vite": "^5"})
+    c = post(client, "/project/detect", root=str(root)).json()["candidates"]
+    assert [(x["framework"], x["command"], x["installed"], x["rel"]) for x in c] == [("Vite", "npm run dev", False, "")]
+    (root / "node_modules").mkdir()
+    (root / "pnpm-lock.yaml").write_text("")
+    c = post(client, "/project/detect", root=str(root)).json()["candidates"]
+    assert c[0]["installed"] is True and c[0]["command"] == "pnpm run dev"
+
+    # Monorepo: apps/web is the UI; a server-only package and an Electron shell are not.
+    mono = tmp_path / "mono"
+    _pkg(mono, {"build": "turbo build"}, {"turbo": "*"})
+    (mono / ".git").mkdir()
+    _pkg(mono / "apps" / "web", {"dev": "next dev"}, deps={"next": "15"})
+    _pkg(mono / "apps" / "api", {"dev": "node server.js"}, deps={"express": "4"})
+    _pkg(mono / "apps" / "desktop", {"start": "electron ."}, {"electron": "30"})
+    c = post(client, "/project/detect", root=str(mono)).json()["candidates"]
+    assert [(x["rel"], x["framework"], x["port"]) for x in c] == [("apps/web", "Next.js", 3000)]
+
+    # No Node UI: a static index.html is served instead.
+    site = tmp_path / "site"
+    (site / "public").mkdir(parents=True)
+    (site / "public" / "index.html").write_text("<h1>hi</h1>")
+    c = post(client, "/project/detect", root=str(site)).json()["candidates"]
+    assert c[0]["kind"] == "static" and c[0]["rel"] == "public"
+
+    # A folder that is not a project (a home folder) is not searched one level down.
+    home = tmp_path / "home2"
+    _pkg(home / "someone-elses-repo", {"dev": "vite"}, {"vite": "5"})
+    assert post(client, "/project/detect", root=str(home)).json()["candidates"] == []
+
+
+def test_dev_log_url_prefers_the_local_line():
+    import io
+
+    class P:
+        stdout = io.BytesIO(b"proxy -> http://localhost:8000/api\n\x1b[32m  \xe2\x9e\x9c  Local:   \x1b[1mhttp://localhost:5173/\x1b[22m\n"
+                            b"  Network: http://192.168.1.4:5173/\n")
+
+    srv = api.DevServer("k", {"id": "node:", "framework": "Vite", "command": "npm run dev"})
+    api._pump(srv, P())
+    assert srv.url == "http://localhost:5173/"
+    assert any("Local:" in line and "\x1b" not in line for line in srv.log)
+
+
+def _wait(client, root, state, timeout=40):
+    import time
+
+    end = time.time() + timeout
+    while time.time() < end:
+        servers = post(client, "/devserver/status", root=str(root)).json()["servers"]
+        if servers and servers[0]["state"] in (state, "exited"):
+            return servers[0]
+        time.sleep(0.3)
+    raise AssertionError(f"server never reached {state}: {servers}")
+
+
+def _get(url: str) -> str:
+    import urllib.request
+
+    with urllib.request.urlopen(url, timeout=5) as r:
+        return r.read().decode()
+
+
+def test_static_site_serves_and_stops(client, tmp_path):
+    site = tmp_path / "mysite"  # not a folder name the parent would serve as its own UI
+    site.mkdir()
+    (site / "index.html").write_text("<h1>static-ui</h1>")
+    started = post(client, "/devserver/start", root=str(site), id="static:").json()
+    srv = _wait(client, site, "ready")
+    assert srv["state"] == "ready", srv
+    assert "static-ui" in _get(srv["url"])
+    # Starting again returns the running server instead of a second one.
+    assert post(client, "/devserver/start", root=str(site), id="static:").json()["url"] == srv["url"]
+    # A parent folder that does not detect this project (not a static folder name it serves, not
+    # a project itself) does not adopt its server.
+    assert post(client, "/project/detect", root=str(tmp_path)).json()["servers"] == []
+    assert post(client, "/project/detect", root=str(site)).json()["servers"][0]["url"] == srv["url"]
+    post(client, "/devserver/stop", key=started["key"])
+    assert post(client, "/devserver/status", root=str(site)).json()["servers"] == []
+    import urllib.error
+
+    with pytest.raises((urllib.error.URLError, ConnectionError, OSError)):
+        _get(srv["url"])
+
+
+@pytest.mark.skipif(not shutil.which("npm"), reason="npm not installed")
+def test_node_dev_server_url_from_its_log_and_tree_kill(client, tmp_path):
+    app = _pkg(tmp_path / "web", {"dev": "node server.js"}, {"vite": "5"})
+    (app / "node_modules").mkdir()
+    (app / "server.js").write_text(
+        "const s=require('http').createServer((q,r)=>r.end('node-ui')).listen(0,'127.0.0.1',"
+        "()=>console.log('  Local:   http://localhost:'+s.address().port+'/'))\n")
+    started = post(client, "/devserver/start", root=str(app), id="node:").json()
+    srv = _wait(client, app, "ready")
+    assert srv["state"] == "ready", srv
+    assert _get(srv["url"]) == "node-ui"
+    post(client, "/devserver/stop", key=started["key"])
+    import time
+    import urllib.error
+
+    time.sleep(1)
+    with pytest.raises((urllib.error.URLError, ConnectionError, OSError)):
+        _get(srv["url"])  # npm's child node process died with it, not only the npm wrapper
+
+
+def test_start_refuses_unknown_candidates_and_reaps_unwatched_servers(client, tmp_path):
+    (tmp_path / "x").mkdir()
+    assert post(client, "/devserver/start", root=str(tmp_path / "x"), id="node:").status_code == 404
+    srv = api.DevServer("k1", {"id": "static:", "framework": "Static site", "command": "x"})
+    api.SERVERS["k1"] = srv
+    try:
+        now = srv.seen
+        assert "k1" not in api.stale_servers(now + 10)
+        assert "k1" in api.stale_servers(now + api.LEASE_SECONDS + 1)
+    finally:
+        api.SERVERS.pop("k1", None)
+

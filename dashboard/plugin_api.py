@@ -13,13 +13,20 @@ refused here on every route.
 
 from __future__ import annotations
 
+import atexit
 import ctypes
 import json
 import os
+import re
 import shutil
+import signal
+import socket
 import subprocess
 import sys
 import tempfile
+import threading
+import time
+from collections import deque
 from pathlib import Path
 from typing import Any
 
@@ -29,7 +36,7 @@ from fastapi import APIRouter, HTTPException
 # blocks the gateway event loop that every Desktop request shares.
 router = APIRouter()
 
-VERSION = "0.1.0"
+VERSION = "0.3.0"
 MAX_READ_BYTES = 5 * 1024 * 1024
 MAX_LIST_ENTRIES = 5000
 MAX_FILES = 50_000
@@ -315,7 +322,331 @@ def git_head_text(path: Path) -> dict[str, Any]:
         return {"text": None}
 
 
+# ── project UI detection and dev servers ───────────────────────────────────────────────────
+#
+# The IDE finds a web UI inside the open folder and runs it so the Browser column can show it.
+# The command is always derived here from the project's own files (package.json scripts, or a
+# static index.html); the client only names a candidate id, never a command.
+
+UI_DEPS = {  # dependency → (framework label, port it usually prints)
+    "next": ("Next.js", 3000), "nuxt": ("Nuxt", 3000), "@remix-run/dev": ("Remix", 5173),
+    "@sveltejs/kit": ("SvelteKit", 5173), "astro": ("Astro", 4321), "@angular/cli": ("Angular", 4200),
+    "react-scripts": ("Create React App", 3000), "gatsby": ("Gatsby", 8000), "@vue/cli-service": ("Vue CLI", 8080),
+    "vite": ("Vite", 5173), "parcel": ("Parcel", 1234), "webpack-dev-server": ("webpack", 8080),
+    "@storybook/react": ("Storybook", 6006), "live-server": ("live-server", 8080), "http-server": ("http-server", 8080),
+    "serve": ("serve", 3000),
+}
+UI_SCRIPTS = ("dev", "start", "serve", "develop", "preview", "storybook")
+STATIC_DIRS = ("", "public", "src", "docs", "site", "www", "web", "frontend", "client")
+SCAN_SKIP = SKIP_DIRS | {"out", "coverage", "target", ".turbo", ".svelte-kit", ".output"}
+URL_RE = re.compile(r"https?://(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1?\]|[\w.-]+\.local)(?::\d+)?(?:/[^\s'\"\x1b]*)?")
+ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+LEASE_SECONDS = 120  # a server nobody has asked about for this long is stopped (the IDE window closed)
+
+
+def _read_json(p: Path) -> dict[str, Any] | None:
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else None
+    except (OSError, ValueError, UnicodeDecodeError):
+        return None
+
+
+def _manager(pkg_dir: Path, root: Path) -> str:
+    """Package manager from the nearest lockfile between the package and the workspace root."""
+    d = pkg_dir
+    while True:
+        for lock, pm in (("pnpm-lock.yaml", "pnpm"), ("yarn.lock", "yarn"), ("bun.lockb", "bun"), ("bun.lock", "bun"),
+                         ("package-lock.json", "npm")):
+            if (d / lock).exists():
+                return pm
+        if d == root or d.parent == d:
+            return "npm"
+        d = d.parent
+
+
+def _installed(pkg_dir: Path, root: Path) -> bool:
+    d = pkg_dir
+    while True:
+        if (d / "node_modules").is_dir():
+            return True
+        if d == root or d.parent == d:
+            return False
+        d = d.parent
+
+
+def _node_candidate(pkg_dir: Path, root: Path) -> dict[str, Any] | None:
+    pkg = _read_json(pkg_dir / "package.json")
+    if not pkg:
+        return None
+    scripts = pkg.get("scripts") if isinstance(pkg.get("scripts"), dict) else {}
+    deps = {**(pkg.get("dependencies") or {}), **(pkg.get("devDependencies") or {})}
+    if "electron" in deps and not any(d in deps for d in ("vite", "next", "react-scripts")):
+        return None  # a desktop app, not a page a browser can show
+    for script in UI_SCRIPTS:
+        cmd = scripts.get(script)
+        if not isinstance(cmd, str):
+            continue
+        hit = next(((dep, *UI_DEPS[dep]) for dep in UI_DEPS if dep in deps or re.search(rf"(^|\s|/){re.escape(dep)}(\s|$)", cmd)), None)
+        if not hit:
+            continue
+        rel = pkg_dir.relative_to(root).as_posix() if pkg_dir != root else ""
+        pm = _manager(pkg_dir, root)
+        return {"id": f"node:{rel}", "kind": "node", "dir": _posix(pkg_dir), "rel": rel, "name": pkg.get("name") or (rel or root.name),
+                "framework": hit[1], "port": hit[2], "script": script, "manager": pm,
+                "command": f"{pm} run {script}" if pm != "yarn" else f"yarn {script}", "installed": _installed(pkg_dir, root)}
+    return None
+
+
+def detect_projects(root: Path) -> list[dict[str, Any]]:
+    """Web UIs inside ``root``: package.json projects at the root, one level down, and under
+    apps/* and packages/* (monorepos), then a static index.html when no Node UI exists."""
+    if not root.is_dir():
+        raise HTTPException(400, "not a directory")
+    dirs = [root]
+    # Look one level down only inside a project (a home folder's subfolders are unrelated repos).
+    is_project = any((root / m).exists() for m in (".git", "package.json", "pnpm-workspace.yaml", "turbo.json", "nx.json"))
+    for base in ((root, root / "apps", root / "packages") if is_project else ()):
+        try:
+            dirs += [d for d in sorted(base.iterdir()) if d.is_dir() and d.name not in SCAN_SKIP and not d.name.startswith(".")]
+        except OSError:
+            continue
+    out, seen = [], set()
+    for d in dirs:
+        c = _node_candidate(d, root)
+        if c and c["id"] not in seen:
+            seen.add(c["id"])
+            out.append(c)
+    if not out:
+        for sub in STATIC_DIRS:
+            d = root / sub if sub else root
+            if (d / "index.html").is_file():
+                out.append({"id": f"static:{sub}", "kind": "static", "dir": _posix(d), "rel": sub, "name": sub or root.name,
+                            "framework": "Static site", "port": 0, "command": "python -m http.server", "installed": True})
+                break
+    # Prefer the root project, then names that look like the app (web, frontend, client, ui, site).
+    rank = lambda c: (c["rel"] != "", not re.search(r"(^|/)(web|frontend|client|ui|site|app|dashboard)$", c["rel"]), c["rel"])
+    return sorted(out, key=rank)
+
+
+class DevServer:
+    def __init__(self, key: str, cand: dict[str, Any]):
+        self.key, self.cand = key, cand
+        self.proc: subprocess.Popen | None = None
+        self.log: deque[str] = deque(maxlen=400)
+        self.url: str | None = None
+        self.state = "starting"  # installing → starting → ready | exited
+        self.exit_code: int | None = None
+        self.seen = time.time()
+        self.stopped = False
+        self.labelled = False  # the URL came from a "Local:" line (beats an earlier proxy or API URL)
+
+    def info(self) -> dict[str, Any]:
+        return {"key": self.key, "id": self.cand["id"], "framework": self.cand["framework"], "command": self.cand["command"],
+                "state": self.state, "url": self.url, "exit_code": self.exit_code, "log": list(self.log)[-80:]}
+
+
+SERVERS: dict[str, DevServer] = {}
+SERVERS_LOCK = threading.Lock()
+
+
+def _free_port() -> int:
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def _port_open(url: str) -> bool:
+    m = re.match(r"https?://([^/:]+|\[[^\]]+\])(?::(\d+))?", url)
+    if not m:
+        return False
+    host = m.group(1).strip("[]")
+    port = int(m.group(2) or (443 if url.startswith("https") else 80))
+    # Node 18+ resolves localhost to ::1 first, so a dev server may listen on IPv6 only.
+    hosts = ["127.0.0.1", "::1"] if host in ("localhost", "0.0.0.0", "::", "") else [host]
+    for h in hosts:
+        try:
+            with socket.create_connection((h, port), timeout=0.5):
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def _spawn(args: list[str], cwd: str) -> subprocess.Popen:
+    env = {**os.environ, "BROWSER": "none", "FORCE_COLOR": "0", "NO_COLOR": "1"}  # BROWSER=none: no system browser tab
+    kw: dict[str, Any] = {"cwd": cwd, "stdout": subprocess.PIPE, "stderr": subprocess.STDOUT, "stdin": subprocess.DEVNULL, "env": env}
+    if sys.platform == "win32":
+        kw["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    else:
+        kw["start_new_session"] = True
+    return subprocess.Popen(args, **kw)
+
+
+def _kill_tree(proc: subprocess.Popen | None) -> None:
+    if not proc or proc.poll() is not None:
+        return
+    try:
+        if sys.platform == "win32":
+            subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], capture_output=True, timeout=15)
+        else:
+            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+            try:
+                proc.wait(timeout=4)
+            except subprocess.TimeoutExpired:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except (OSError, subprocess.SubprocessError):
+        proc.kill()
+
+
+def _command(cand: dict[str, Any], install: bool) -> list[str]:
+    if cand["kind"] == "static":
+        return [sys.executable, "-m", "http.server", str(cand["port"]), "--bind", "127.0.0.1"]
+    exe = shutil.which(cand["manager"]) or shutil.which("npm")
+    if not exe:
+        raise HTTPException(424, f"{cand['manager']} is not installed on the agent's machine")
+    if install:
+        return [exe, "install"]
+    return [exe, cand["script"]] if cand["manager"] == "yarn" else [exe, "run", cand["script"]]
+
+
+def _pump(srv: DevServer, proc: subprocess.Popen) -> None:
+    assert proc.stdout is not None
+    for raw in iter(proc.stdout.readline, b""):
+        line = ANSI_RE.sub("", raw.decode("utf-8", "replace")).rstrip()
+        if not line:
+            continue
+        srv.log.append(line)
+        if srv.state == "installing" or srv.labelled:
+            continue
+        m = URL_RE.search(line)
+        if m and (srv.url is None or re.search(r"\blocal\b\s*:", line, re.I)):
+            srv.url = m.group(0).rstrip(".,;)").replace("0.0.0.0", "localhost").replace("[::]", "localhost")
+            srv.labelled = bool(re.search(r"\blocal\b\s*:", line, re.I))
+
+
+def _run(srv: DevServer, install: bool) -> None:
+    """Install (when asked), then run the dev command; watch its log for the URL and probe it."""
+    try:
+        if install:
+            srv.state = "installing"
+            srv.proc = _spawn(_command(srv.cand, True), srv.cand["dir"])
+            _pump(srv, srv.proc)
+            if srv.proc.wait() != 0 or srv.stopped:
+                srv.state, srv.exit_code = "exited", srv.proc.returncode
+                return
+        srv.state = "starting"
+        if srv.cand["kind"] == "static":
+            srv.url = f"http://localhost:{srv.cand['port']}/"
+        srv.proc = proc = _spawn(_command(srv.cand, False), srv.cand["dir"])
+        threading.Thread(target=_pump, args=(srv, proc), daemon=True).start()
+        guess_at = time.time() + 25  # no URL printed by then: try the framework's usual port
+        while proc.poll() is None and not srv.stopped:
+            if srv.url is None and time.time() > guess_at and srv.cand.get("port"):
+                srv.url = f"http://localhost:{srv.cand['port']}/"
+            if srv.url and srv.state != "ready" and _port_open(srv.url):
+                srv.state = "ready"
+            time.sleep(0.3)
+        srv.state, srv.exit_code = "exited", proc.returncode
+    except HTTPException as e:
+        srv.log.append(str(e.detail))
+        srv.state = "exited"
+    except OSError as e:
+        srv.log.append(f"could not start: {e}")
+        srv.state = "exited"
+
+
+def start_server(root: Path, cand_id: str, install: bool = False) -> dict[str, Any]:
+    cand = next((c for c in detect_projects(root) if c["id"] == cand_id), None)
+    if not cand:
+        raise HTTPException(404, "no such project UI in this folder")
+    key = cand["dir"]
+    with SERVERS_LOCK:
+        srv = SERVERS.get(key)
+        if srv and srv.state != "exited":
+            srv.seen = time.time()
+            return srv.info()
+        if cand["kind"] == "static":
+            cand = {**cand, "port": _free_port()}
+        srv = DevServer(key, cand)
+        SERVERS[key] = srv
+    threading.Thread(target=_run, args=(srv, install), daemon=True).start()
+    return srv.info()
+
+
+def stop_server(key: str) -> dict[str, Any]:
+    with SERVERS_LOCK:
+        srv = SERVERS.pop(key, None)
+    if srv:
+        srv.stopped = True
+        _kill_tree(srv.proc)
+        srv.state = "exited"
+    return {"ok": True}
+
+
+def server_status(root: Path) -> dict[str, Any]:
+    """Servers inside ``root``. Asking counts as a lease renewal."""
+    prefix = _posix(root).rstrip("/")
+    now = time.time()
+    out = []
+    with SERVERS_LOCK:
+        for srv in SERVERS.values():
+            if srv.key == prefix or srv.key.startswith(prefix + "/"):
+                srv.seen = now
+                out.append(srv.info())
+    return {"servers": out}
+
+
+def stale_servers(now: float) -> list[str]:
+    """Servers to stop: unasked-for past the lease (their IDE window closed), or long exited."""
+    return [k for k, s in list(SERVERS.items())
+            if now - s.seen > LEASE_SECONDS or (s.state == "exited" and now - s.seen > 600)]
+
+
+def _reap() -> None:
+    while True:
+        time.sleep(15)
+        for k in stale_servers(time.time()):
+            stop_server(k)
+
+
+threading.Thread(target=_reap, daemon=True, name="hermes-ide-reaper").start()
+atexit.register(lambda: [stop_server(k) for k in list(SERVERS)])
+
+
 # ── routes ──────────────────────────────────────────────────────────────────────────────────
+
+
+@router.post("/project/detect")
+def route_project_detect(body: dict) -> dict:
+    root = resolve_path(_body(body).get("root"))
+    candidates = detect_projects(root)
+    # Only servers of projects found here: a parent folder (a home folder) must not adopt a dev
+    # server that belongs to some project deep inside it.
+    dirs = {c["dir"] for c in candidates}
+    return {"candidates": candidates, "servers": [s for s in server_status(root)["servers"] if s["key"] in dirs]}
+
+
+@router.post("/devserver/start")
+def route_devserver_start(body: dict) -> dict:
+    b = _body(body)
+    cand_id = b.get("id")
+    if not isinstance(cand_id, str) or not cand_id:
+        raise HTTPException(400, "id required")
+    return start_server(resolve_path(b.get("root")), cand_id, bool(b.get("install")))
+
+
+@router.post("/devserver/status")
+def route_devserver_status(body: dict) -> dict:
+    return server_status(resolve_path(_body(body).get("root")))
+
+
+@router.post("/devserver/stop")
+def route_devserver_stop(body: dict) -> dict:
+    key = _body(body).get("key")
+    if not isinstance(key, str) or key not in SERVERS:
+        return {"ok": True}
+    return stop_server(key)
 
 
 @router.post("/health")

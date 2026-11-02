@@ -8,8 +8,10 @@
 //   node dev/cdp.mjs type "text"                 type into the focused element
 //   node dev/cdp.mjs fclick ".cm-line >> nth=1"  click inside the editor frame
 //   node dev/cdp.mjs click 640,320               click window coordinates
+//   node dev/cdp.mjs drag "100,20 900,400"       real pointer drag (move a column by its tab)
 //   node dev/cdp.mjs reload 15000                reload the window, print plugin console lines
 //   node dev/cdp.mjs pages                       list app windows; WIN=secondary targets the IDE window
+//                                                (add SID=<part of a session id> when several are open)
 import { createRequire } from 'node:module'
 
 const agentDir = process.env.HERMES_AGENT_DIR || `${process.env.LOCALAPPDATA}/hermes/hermes-agent`
@@ -20,7 +22,7 @@ const [cmd, arg] = process.argv.slice(2)
 const browser = await chromium.connectOverCDP(`http://127.0.0.1:${process.env.CDP_PORT || 9223}`)
 const pages = browser.contexts().flatMap(c => c.pages())
 const page = process.env.WIN
-  ? pages.find(p => p.url().includes(`win=${process.env.WIN}`))
+  ? pages.find(p => p.url().includes(`win=${process.env.WIN}`) && (!process.env.SID || p.url().includes(process.env.SID)))
   : pages.find(p => /index\.html(?!.*win=)/.test(p.url())) || pages[0]
 if (cmd === 'pages') {
   console.log(pages.map(p => p.url()).join('\n'))
@@ -63,8 +65,20 @@ try {
     const [x, y] = arg.split(',').map(Number)
     await page.mouse.click(x, y)
     console.log('clicked', x, y)
+  } else if (cmd === 'drag') {
+    // A real pointer drag in steps (the app's tab drags need movement past a threshold).
+    const [[x1, y1], [x2, y2]] = arg.split(' ').map(p => p.split(',').map(Number))
+    await page.mouse.move(x1, y1)
+    await page.mouse.down()
+    for (let i = 1; i <= 24; i++) {
+      await page.mouse.move(x1 + ((x2 - x1) * i) / 24, y1 + ((y2 - y1) * i) / 24)
+      await page.waitForTimeout(16)
+    }
+    await page.waitForTimeout(200)
+    await page.mouse.up()
+    console.log('dragged', x1, y1, '->', x2, y2)
   } else {
-    console.log('commands: eval frame shot reload fclick key type click')
+    console.log('commands: eval frame shot reload fclick key type click drag')
   }
 } finally {
   await browser.close().catch(() => {})

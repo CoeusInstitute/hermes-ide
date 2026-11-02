@@ -8,6 +8,34 @@ Wiring legend:
 - **Mirror**: the IDE follows Desktop state (session, folder, theme) and stays in sync with it.
 - **Add**: built by the plugin because Desktop has no equivalent.
 
+## Gate 0.3: columns you arrange, the project's UI, IDE chats in the sidebar (shipped in v0.3, verified in a sandboxed Desktop, 2026-11-02)
+
+Evidence is from a sandboxed packaged Desktop at 3840 px driven over CDP with real pointer and keyboard input, against a real Vite project whose dependencies were not installed at the start.
+
+| Feature | Cursor | Wiring | Verified |
+|---|---|---|---|
+| Columns are separate tiles you drag into any arrangement | Drag views between editor groups and side bars | Add: Explorer, Editor and Browser as three `host.openWorkspace` tiles; Reuse the app's tab drag (FancyZones) to move them | A real pointer drag of the Editor tab onto the chat zone's right edge moved it there: order `[explorer, chat, editor]` |
+| The arrangement is remembered | Layout restore | Add: `readColumns` by geometry, `layout` in plugin storage, `dockPlan` rebuilds it as chained docks on open | Closed the IDE window, reopened it from the sidebar: `[explorer, browser, chat, editor]` came back with the same widths; after the half-sash correction the Explorer stayed 396 px across reloads (it had shrunk 4 px per open before) |
+| Column widths on open | Cursor's proportions | Add `columnPlan` targets, saved fractions win; seams moved from the measured neighbour | Reset gave Explorer 340, Editor 1426, Browser 1229, chat 845 (the app's floor) at 3840 |
+| Show or hide each column | Toggle Primary Side Bar, Panel, Secondary Side Bar | Add four toggles in the titlebar's right cluster (Explorer, Editor, Browser, Terminal) and palette commands | A real click on the Browser toggle opened the column left of the chat at 1229 px |
+| Reset the layout | View → Reset Layout | Add **IDE: Reset Column Layout**: clear the saved layout, reload through the restore path | Run from the palette with real keys: the default four columns came back |
+| Header rows line up across columns | One header height | Add `--hi-bar` (35 px) and `--hi-sub` (28 px) for every column's first two rows | Explorer, Editor, Browser bars all top 34 / height 35; second rows 69 / 28 |
+| Empty editor shows a compact, clickable shortcut list | Editor watermark | Add: one table block (it used to be a grid that spread each word over the column) | Block 186 px tall, centred; clicking **Go to File** opened Quick Open |
+| Find the project's web UI | n/a (Cursor runs tasks you configure) | Add backend `/project/detect`: package.json dev scripts for 16 frameworks (root, one level down, `apps/*`, `packages/*`), lockfile picks the package manager, else a static `index.html` | Detected the Vite demo; pytest covers Vite, pnpm, a Next.js monorepo app beside an API and an Electron shell, a static site, and a home folder that must not be scanned |
+| Ask once before running a project's code | Workspace Trust | Add a trust banner (**Always run for this project**, **Run once**, **Not now**); `trustedProjects` in plugin storage | The banner appeared for the untrusted demo; after **Always**, reopening started it with no prompt |
+| Install and run | n/a | Add `/devserver/start` with `install`: the backend runs `<pm> install`, then the dev script | `installing` → `running` within 9 s; page loaded |
+| Start the UI when the IDE opens | n/a | Add: trusted, installed project and the setting on → start on folder change | Reopened the IDE: `running` and the page loaded within 3 s |
+| URL from the dev server's own output | n/a | Add: a `Local:` line wins; the framework's usual port is the fallback | Webview at `http://localhost:5173/`; pytest: a proxy URL printed first loses to the `Local:` line |
+| Stop, restart, live log; no orphans | Terminal tasks | Add process-tree kill, a 120 s lease renewed by the column's polling, stop all on gateway exit | **Stop**: state `stopped` and nothing listening on 5173; a reload re-attached to the running server; pytest checks npm's child node process dies too |
+| Browser column | Cursor's built-in browser | Add an Electron `<webview>` (pop-outs allow it) with address bar, back, forward, reload, DevTools, open externally | Showed the demo page; inputs use a theme tint (the app's `--ui-bg-input` is near-white in dark mode and was fixed after measuring rgb(252,252,252)) |
+| Pick an element and send it to the chat with its likely source | Select element | Add a picker script run in the page; search the project for the element's id, text or class; insert a block into the composer | Clicked the demo button with a real pointer: the composer got its selector, 83×31 size, text, markup, styles and `@file:index.html:3` |
+| The agent opens a page | n/a | Add `url` to `ide_open` | A real turn called `ide_open` with a URL; the Browser column navigated to it |
+| IDE chats get their own sidebar group | Agents list | Add a plain-DOM group under SESSIONS (no SDK door for list groups), hide those chats from the date groups | Group listed the chat with model, message count and age; its date-group row was hidden; one group after hot reloads (a queued frame used to re-add old copies) |
+| Clicking an IDE chat opens the IDE | n/a | Add: `SESSION_ROW_AREAS.leading` badge with a capture-phase click on the row body; group rows open the window directly | With the IDE window closed, a real click on the pinned row opened it with the saved layout |
+| Pinned IDE chats are marked | n/a | Add an `IDE` badge in the accent colour | Badge shown in Pinned; the group dropped the chat at once and took it back on unpin |
+| New IDE chat | New agent | Add **+** on the group: a new chat that opens in the IDE after its first message | Sent the first message: its IDE window opened and the group listed two chats, newest first |
+| Remove from IDE chats | n/a | Add **×** on a group row | The chat went back to the normal list, no badge, nothing hidden |
+
 ## Gate 0: shipped in v0.1, reworked in v0.2 to a pop-out IDE window (verified in a sandboxed Desktop, 2026-11-01)
 
 ### Layout and shell
@@ -60,10 +88,7 @@ Wiring legend:
 
 ### Browser and element picking
 
-| Feature | Cursor | Wiring | Verified |
-|---|---|---|---|
-| Render a file or URL beside the chat | Open Browser | Reuse the Desktop Browser; the IDE shows the app's own preview card and core opens the tab | `index.html` rendered in a Browser tab |
-| Pick an element and send it to the chat | Select element | Reuse Browser **Annotate**: click an element, add a note, **Add comment** | The composer received the selector `#title`, the element's HTML, its styles and a screenshot |
+Superseded in v0.3 by the IDE's own Browser column and picker (see Gate 0.3). v0.2 reused the Desktop Browser and its **Annotate** tool through the app's preview card, which needed a click and docked the preview where the app put it.
 
 ## Gate 1: Cursor parity polish (next)
 
@@ -71,14 +96,12 @@ Ordered by the gap against the reference screenshot (see docs/RESEARCH.md sectio
 
 | Feature | Wiring | Acceptance test |
 |---|---|---|
-| Browser in the center: open a running app (`localhost` dev server or URL) as the main surface, chat on the right | Reuse the Desktop Browser; add an "IDE: Open App URL" command and a layout preset that docks the Browser where the Editor tile sits, with the Editor tile stacked behind it | One command shows Explorer, the rendered app in the center and the chat on the right; Annotate works on it |
 | Changed-files strip above the chat ("9 Files · Review") | Add a composer `top` contribution listing files the session's tool calls wrote, each opening the inline review; Keep All / Undo All | After a turn that edits 3 files the strip reads "3 Files"; Undo All restores all 3 byte-for-byte |
 | Status bar: branch with dirty marker, ahead/behind, current commit | Mirror `/git/status` (add `git rev-parse --short HEAD`) | Branch and commit update after the agent commits |
 | Chats as tabs in the right column | Reuse sessions: open chats with `host.openSession(id, { intent: 'tab' })`, plus a `+` and history in the IDE layout | Two chats open as tabs beside the editor; switching tabs switches the IDE's tab set |
 | Language-colored file icons, workspace header, collapsed Outline section | Add | Icons match file type; the header names the workspace |
 | Composer mode picker (Agent / Plan / Ask) | Reuse the catalog plugin `composer-modes` rather than rebuild it | Installed alongside; modes reach the session |
 | Device / responsive preview sizes | Upstream ask if the Desktop Browser lacks it; otherwise reuse | The rendered app can switch to a phone width |
-| Picked element → jump to source | Add: on an Annotate handoff, search the workspace for the element's id, classes and text (`/search`), open the best match | Picking `#title` opens `index.html` at the `<h1>` line |
 | Explorer keyboard navigation, multi-select, drag to move, drop files from the OS | Add | Arrow keys move, Enter opens, F2 renames, Delete trashes; dragging a file into a folder moves it without overwrite |
 | Split editor and tab drag-reorder | Add a second editor frame bound to the same buffers | Edits in one split appear in the other; order persists per session |
 | Image, SVG and Markdown preview tabs | Add read-only tabs; Reuse the Browser for HTML | A PNG opens as an image tab; Markdown toggles source and preview |
@@ -98,7 +121,10 @@ Ordered by the gap against the reference screenshot (see docs/RESEARCH.md sectio
 
 | Item | Why | Acceptance test |
 |---|---|---|
-| Ask the Desktop SDK for `host.openPreview(target)` | Opens the Browser directly; removes the one-click card | Open in Browser opens the tab with no dialog |
+| Ask the Desktop SDK for a session-list group door (`sidebar.sessionGroups`) | The IDE group is placed by DOM markers today | The group renders through the SDK; no DOM anchors |
+| Ask for a door to size a split (`host.setPaneShare`) | Column sizing drags the app's sash today | Columns size with no synthetic pointer events |
+| Open the picked element's source in the editor | v0.3 sends likely source lines to the chat; jumping to them in the editor is next | Picking an element opens its best match at the line |
+| Python web UIs (Streamlit, Flask, Django, Gradio) in project detection | v0.3 detects Node and static UIs only | A Streamlit app is found and starts |
 | Ask for a plugin door to set a draft chat's folder | Starts a new chat in the IDE's folder | A new chat's first turn runs in the opened folder |
 | Ask for a keybind scope for focused plugin surfaces | Would allow an in-DOM editor later; the frame works today | Not blocking |
 | Publish: make the repo public, tag releases, submit to the Hermes plugin catalog | One-click installs for anyone | `hermes plugins install hermes-ide` from the catalog |

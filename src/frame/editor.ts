@@ -160,7 +160,7 @@ const chrome = EditorView.theme({
   '.cm-panels.cm-panels-top': { borderBottom: '1px solid var(--ui-stroke-tertiary)' },
   '.cm-panels.cm-panels-bottom': { borderTop: '1px solid var(--ui-stroke-tertiary)' },
   '.cm-panel input, .cm-panel button, .cm-textfield, .cm-button': {
-    fontFamily: 'inherit', fontSize: '12px', color: 'var(--ui-text-primary)', backgroundColor: 'var(--ui-bg-input, transparent)',
+    fontFamily: 'inherit', fontSize: '12px', color: 'var(--ui-text-primary)', backgroundColor: 'color-mix(in srgb, var(--ui-text-primary) 5%, transparent)',
     border: '1px solid var(--ui-stroke-secondary)', borderRadius: '5px', backgroundImage: 'none'
   },
   '.cm-tooltip': { backgroundColor: 'var(--ui-bg-elevated, var(--ui-bg-secondary))', color: 'var(--ui-text-primary)', border: '1px solid var(--ui-stroke-secondary)', borderRadius: '6px' },
@@ -258,6 +258,15 @@ function commandKey(id: string) {
     send({ type: 'command', id })
     return true
   }
+}
+
+// The empty-editor table: each row runs its command. Mac keyboards say ⌘ and ⌥.
+document.getElementById('empty')?.addEventListener('click', e => {
+  const id = (e.target as HTMLElement).closest<HTMLElement>('[data-cmd]')?.dataset.cmd
+  if (id) send({ type: 'command', id })
+})
+if (/Mac/.test(navigator.platform)) {
+  for (const k of document.querySelectorAll('#empty kbd')) k.textContent = ({ Ctrl: '⌘', Alt: '⌥' } as Record<string, string>)[k.textContent || ''] ?? k.textContent
 }
 
 function addToChat(view: EditorView) {

@@ -15,20 +15,33 @@ import {
   DialogHeader,
   DialogTitle,
   host,
-  Input,
-  MessageTextContent,
   SegmentedControl,
   ToggleRow,
   useValue
 } from '@hermes/plugin-sdk'
-import { Fragment, type PointerEvent as ReactPointerEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createElement, Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 
 import FRAME_HTML from 'virtual:frame-html'
 
 import {
+  $askTrust,
+  $candidates,
+  $picking,
+  $selected,
+  $server,
+  type Candidate,
+  detectProject,
+  pickElement,
+  restartUi,
+  servedUrl,
+  startUi,
+  stopUi,
+  trust
+} from './browser'
+import {
   $active,
   $backend,
-  $browserTarget,
+  $browserNav,
   $banners,
   $confirmClose,
   $cursor,
@@ -43,7 +56,8 @@ import {
   $tabs,
   $treeVersion,
   $view,
-  $explorerHidden,
+  $ideChats,
+  $openTiles,
   IDE_WINDOW,
   activate,
   addToChat,
@@ -51,7 +65,6 @@ import {
   bumpTree,
   call,
   closeTab,
-  columnPlan,
   ctx,
   detachFrame,
   type Entry,
@@ -71,20 +84,21 @@ import {
   setRoot,
   setSetting,
   syncRoot,
+  toggleTile,
   undoAgentEdit
 } from './core'
-import { baseName, dirName, joinPath, pathKey, rankFiles, splitLineSuffix } from './util'
+import { addressToUrl, baseName, dirName, joinPath, pathKey, rankFiles, splitLineSuffix, type TileId } from './util'
 
 // ── styles (scoped by the hi- prefix; theme tokens only, never literal colors) ──────────────
 
 const STYLES = `
 .hi-pane{display:flex;flex-direction:column;height:100%;min-height:0;font-family:var(--font-sans);font-size:12.5px;color:var(--ui-text-secondary)}
-.hi-head{display:flex;align-items:center;gap:2px;padding:6px 6px 4px 10px;flex:none}
+.hi-head{display:flex;align-items:center;gap:2px;height:var(--hi-sub,28px);box-sizing:border-box;padding:0 6px 0 10px;flex:none}
 .hi-title{flex:1;min-width:0;font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--ui-text-tertiary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .hi-btn{display:inline-flex;align-items:center;justify-content:center;min-width:24px;height:22px;padding:0 4px;border-radius:5px;border:0;background:none;color:var(--ui-text-tertiary);cursor:pointer;font:inherit}
 .hi-btn:hover{background:var(--ui-control-hover-background);color:var(--ui-text-primary)}
 .hi-btn[data-on=true]{background:var(--ui-control-active-background);color:var(--ui-text-primary)}
-.hi-views{display:flex;gap:2px;padding:4px 6px 2px;flex:none;border-bottom:1px solid var(--ui-stroke-tertiary)}
+.hi-views{display:flex;align-items:center;gap:2px;height:var(--hi-bar,35px);box-sizing:border-box;padding:0 6px;flex:none;border-bottom:1px solid var(--hi-divider)}
 .hi-scroll{flex:1;min-height:0;overflow:auto;padding:2px 0 16px}
 .hi-row{display:flex;align-items:center;gap:4px;height:22px;padding-right:8px;cursor:pointer;white-space:nowrap;user-select:none;color:var(--ui-text-secondary)}
 .hi-row:hover{background:var(--ui-row-hover-background)}
@@ -94,16 +108,16 @@ const STYLES = `
 .hi-dim{color:var(--ui-text-quaternary)}
 .hi-git{flex:none;width:14px;text-align:center;font-size:10.5px;font-weight:600}
 [data-c=M]{color:var(--ui-yellow)} [data-c="?"],[data-c=A]{color:var(--ui-green)} [data-c=D]{color:var(--ui-red)} [data-c=U],[data-c=R]{color:var(--ui-orange)}
-.hi-edit{flex:1;min-width:0;height:20px;font:inherit;color:var(--ui-text-primary);background:var(--ui-bg-input,transparent);border:1px solid var(--ui-accent);border-radius:3px;padding:0 4px;outline:none}
+.hi-edit{flex:1;min-width:0;height:20px;font:inherit;color:var(--ui-text-primary);background:color-mix(in srgb,var(--ui-text-primary) 5%,transparent);border:1px solid var(--ui-accent);border-radius:3px;padding:0 4px;outline:none}
 .hi-field{display:flex;gap:4px;padding:6px 8px;flex:none;align-items:center}
-.hi-field input{flex:1;min-width:0;height:26px;font:inherit;color:var(--ui-text-primary);background:var(--ui-bg-input,transparent);border:1px solid var(--ui-stroke-secondary);border-radius:5px;padding:0 8px;outline:none}
+.hi-field input{flex:1;min-width:0;height:26px;font:inherit;color:var(--ui-text-primary);background:color-mix(in srgb,var(--ui-text-primary) 5%,transparent);border:1px solid var(--ui-stroke-secondary);border-radius:5px;padding:0 8px;outline:none}
 .hi-field input:focus{border-color:var(--ui-accent)}
 .hi-group{display:flex;align-items:center;gap:6px;height:22px;padding:0 8px;cursor:pointer;color:var(--ui-text-primary);font-weight:500}
 .hi-hit{padding-left:26px}
 .hi-hit mark{background:color-mix(in srgb,var(--ui-yellow) 35%,transparent);color:inherit;border-radius:2px}
 .hi-empty{padding:16px 14px;color:var(--ui-text-tertiary);line-height:1.5}
-.hi-tabs{display:flex;flex:none;overflow-x:auto;scrollbar-width:none;min-height:33px;background:var(--hi-tone-side);box-shadow:inset 0 -1px 0 var(--ui-stroke-secondary)}
-.hi-tab{position:relative;display:flex;align-items:center;gap:6px;height:33px;padding:0 6px 0 12px;border-right:1px solid var(--ui-stroke-secondary);color:var(--ui-text-tertiary);cursor:pointer;white-space:nowrap;font-size:12px;user-select:none}
+.hi-tabs{display:flex;flex:none;overflow-x:auto;scrollbar-width:none;height:var(--hi-bar,35px);box-sizing:border-box;background:var(--hi-tone-side);box-shadow:inset 0 -1px 0 var(--hi-divider)}
+.hi-tab{position:relative;display:flex;align-items:center;gap:6px;height:100%;box-sizing:border-box;padding:0 6px 0 12px;border-right:1px solid var(--hi-divider);color:var(--ui-text-tertiary);cursor:pointer;white-space:nowrap;font-size:12px;user-select:none}
 .hi-tab:hover{color:var(--ui-text-secondary)}
 .hi-tab[data-active=true]{color:var(--ui-text-primary);background:var(--hi-tone-editor)}
 .hi-tab[data-active=true]::after{content:"";position:absolute;left:0;right:0;top:0;height:1.5px;background:var(--ui-accent)}
@@ -113,31 +127,46 @@ const STYLES = `
 .hi-dot{width:8px;height:8px;border-radius:50%;background:var(--ui-text-secondary);margin:0 5px}
 .hi-tab[data-dirty=true]:hover .hi-dot{display:none}
 .hi-tab[data-dirty=true]:not(:hover) .hi-x{display:none}
-.hi-crumbs{display:flex;align-items:center;gap:2px;flex:none;height:26px;padding:0 6px 0 12px;font-size:11.5px;color:var(--ui-text-tertiary);white-space:nowrap;overflow:hidden}
+.hi-crumbs{display:flex;align-items:center;gap:2px;flex:none;height:var(--hi-sub,28px);box-sizing:border-box;padding:0 6px 0 12px;font-size:11.5px;color:var(--ui-text-tertiary);white-space:nowrap;overflow:hidden}
 .hi-crumbs .hi-sep{opacity:.6}
 .hi-crumbs .hi-spacer{flex:1}
 .hi-banner{display:flex;flex-wrap:wrap;align-items:center;gap:8px;flex:none;padding:6px 12px;font-size:12px;color:var(--ui-text-primary);border-bottom:1px solid var(--ui-stroke-tertiary);background:color-mix(in srgb,var(--ui-accent) 9%,transparent)}
 .hi-banner .hi-spacer{flex:1}
 .hi-frame{flex:1;min-height:0;width:100%;border:0;display:block;background:transparent}
 .hi-qo{display:flex;flex-direction:column;gap:6px}
-.hi-qo input{height:30px;font:inherit;font-size:13px;color:var(--ui-text-primary);background:var(--ui-bg-input,transparent);border:1px solid var(--ui-stroke-secondary);border-radius:6px;padding:0 10px;outline:none}
+.hi-qo input{height:30px;font:inherit;font-size:13px;color:var(--ui-text-primary);background:color-mix(in srgb,var(--ui-text-primary) 5%,transparent);border:1px solid var(--ui-stroke-secondary);border-radius:6px;padding:0 10px;outline:none}
 .hi-qo-list{max-height:52vh;overflow:auto;font-size:12.5px}
 .hi-qo-row{display:flex;gap:8px;align-items:baseline;padding:4px 8px;border-radius:5px;cursor:pointer;color:var(--ui-text-secondary)}
 .hi-qo-row[data-on=true]{background:var(--ui-row-active-background);color:var(--ui-text-primary)}
 .hi-status{display:inline-flex;gap:10px;align-items:center;padding:0 6px;font-size:.6875rem;color:var(--ui-text-tertiary);white-space:nowrap}
 .hi-card{display:inline-flex;align-items:center;gap:8px;margin:4px 0;padding:6px 10px;border:1px solid var(--ui-stroke-secondary);border-radius:8px;font-size:12.5px;color:var(--ui-text-primary);background:none;cursor:pointer;font-family:var(--font-mono)}
-/* Column dividers: the theme's base (text) colour at 18%, a neutral line visible on every tone; the
-   theme strokes are accent-tinted and nearly invisible on dark surfaces. Column tones, Cursor's order: Explorer darkest, chat in between (the app's own chrome tone), editor
-   lightest. Opaque theme surfaces on purpose: glass skins make the *-surface-background roles
-   transparent, which would let every column show the same window backing. */
-.hi-ide{--hi-tone-side:var(--ui-bg-sidebar);--hi-tone-editor:var(--ui-bg-elevated,var(--ui-bg-editor));--hi-divider:color-mix(in srgb,var(--ui-base) 18%,transparent);display:flex;height:100%;min-height:0;min-width:0;background:var(--hi-tone-editor)}
-.hi-ide-side{flex:none;min-width:0;height:100%;background:var(--hi-tone-side);border-right:1px solid var(--hi-divider)}
-.hi-ide-side .hi-views{border-bottom-color:var(--ui-stroke-secondary)}
-.hi-ide-main{flex:1;min-width:0;height:100%;background:var(--hi-tone-editor)}
-.hi-ide-sash{flex:none;width:5px;margin:0 -3px 0 -2px;z-index:2;cursor:col-resize;position:relative}
-.hi-ide-sash:hover,.hi-ide[data-drag=true] .hi-ide-sash{background:color-mix(in srgb,var(--ui-accent) 45%,transparent)}
-.hi-ide[data-drag=true]{cursor:col-resize;user-select:none}
-.hi-ide[data-drag=true] iframe{pointer-events:none}
+/* Columns. Every column's first bar is --hi-bar tall and its second row --hi-sub, so the rows line
+   up across the window. Tones follow Cursor's order (Explorer darkest, chat in between with the
+   app's chrome tone, editor and browser lightest), from the opaque theme surfaces: glass skins make
+   the *-surface-background roles transparent. Dividers use the theme's base (text) colour at 18%,
+   a neutral line on every tone; the theme strokes are accent-tinted and vanish on dark surfaces. */
+.hi-tile{--hi-bar:35px;--hi-sub:28px;--hi-tone-side:var(--ui-bg-sidebar);--hi-tone-editor:var(--ui-bg-elevated,var(--ui-bg-editor));--hi-divider:color-mix(in srgb,var(--ui-base) 18%,transparent);display:flex;flex-direction:column;height:100%;min-height:0;min-width:0;background:var(--hi-tone-editor)}
+.hi-tile[data-tile=explorer]{background:var(--hi-tone-side)}
+.hi-tile .hi-pane{flex:1;min-height:0}
+.hi-bbar{display:flex;align-items:center;gap:2px;height:var(--hi-bar);box-sizing:border-box;padding:0 6px;flex:none;background:var(--hi-tone-side);border-bottom:1px solid var(--hi-divider)}
+.hi-url{flex:1;min-width:60px;height:24px;margin:0 4px;font:inherit;font-size:12px;color:var(--ui-text-primary);background:color-mix(in srgb,var(--ui-text-primary) 5%,transparent);border:1px solid var(--hi-divider);border-radius:6px;padding:0 9px;outline:none}
+.hi-url:focus{border-color:var(--ui-accent)}
+.hi-bsub{display:flex;align-items:center;flex-wrap:wrap;gap:8px;min-height:var(--hi-sub);box-sizing:border-box;padding:2px 10px;flex:none;font-size:12px;color:var(--ui-text-secondary);border-bottom:1px solid var(--hi-divider)}
+.hi-bsub .hi-spacer{flex:1}
+.hi-pill{display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 8px;border:0;border-radius:11px;background:none;color:var(--ui-text-secondary);font:inherit;font-size:11.5px;cursor:pointer;white-space:nowrap}
+.hi-pill:hover{background:var(--ui-control-hover-background);color:var(--ui-text-primary)}
+.hi-led{width:7px;height:7px;border-radius:50%;background:var(--ui-text-quaternary);flex:none}
+.hi-led[data-s=ready]{background:var(--ui-green)} .hi-led[data-s=starting],.hi-led[data-s=installing]{background:var(--ui-yellow)} .hi-led[data-s=exited]{background:var(--ui-red)}
+.hi-web{position:relative;flex:1;min-height:0;display:flex}
+.hi-web webview{flex:1;width:100%;height:100%;border:0;background:#fff}
+.hi-log{flex:none;max-height:40%;overflow:auto;margin:0;padding:8px 12px;font:11.5px/1.5 var(--font-mono);white-space:pre-wrap;color:var(--ui-text-secondary);border-bottom:1px solid var(--hi-divider);background:var(--hi-tone-side)}
+.hi-bempty{position:absolute;inset:0;display:grid;place-items:center;padding:24px;text-align:center;color:var(--ui-text-tertiary);font-size:12.5px;line-height:1.6;background:var(--hi-tone-editor)}
+.hi-toggles{display:inline-flex;align-items:center;gap:1px;margin-right:4px;-webkit-app-region:no-drag;app-region:no-drag}
+.hi-toggle{display:inline-grid;place-items:center;width:24px;height:24px;border:0;border-radius:5px;background:none;color:var(--ui-text-tertiary);cursor:pointer}
+.hi-toggle:hover{background:var(--ui-control-hover-background);color:var(--ui-text-primary)}
+.hi-toggle[data-on=true]{color:var(--ui-text-primary)}
+.hi-toggle[data-on=true]::after{content:"";position:absolute;width:12px;height:2px;margin-top:20px;border-radius:1px;background:var(--ui-accent)}
+.hi-toggle{position:relative}
 .hi-open-ide{display:inline-flex;align-items:center;gap:4px;height:18px;padding:0 6px;border:0;border-radius:4px;background:none;color:var(--ui-text-tertiary);font:inherit;font-size:.6875rem;cursor:pointer}
 .hi-open-ide:hover{background:var(--ui-control-hover-background);color:var(--ui-text-primary)}
 .hi-card:hover{background:var(--ui-row-hover-background)}
@@ -678,64 +707,22 @@ function isLight(color: string | undefined) {
   return 0.2126 * r + 0.7152 * g + 0.0722 * b > 140
 }
 
-/** The IDE tile in the IDE window: Explorer | Editor, with its own resizable seam. The chat sits to
- *  the right in the app's own pane, so the IDE never renders a chat of its own. */
-export function IdeLayout() {
-  const hidden = useValue($explorerHidden)
-  // Until the user drags the seam, the Explorer follows the window (the pop-out opens at 420px
-  // and is maximized a moment later).
-  const [userWidth, setUserWidth] = useState<number | null>(() => {
-    const saved = Number(ctx.storage.get('explorerWidth', 0))
-    return saved >= 160 && saved <= 900 ? saved : null
-  })
-  const [viewport, setViewport] = useState(window.innerWidth)
-  useEffect(() => ctx.addEventListener(window, 'resize', () => setViewport(window.innerWidth)), [])
-  const width = userWidth ?? columnPlan(viewport).explorer
-  const [drag, setDrag] = useState(false)
-  const widthRef = useRef(width)
-  widthRef.current = width
-
-  const startDrag = (e: ReactPointerEvent<HTMLDivElement>) => {
-    if (e.button !== 0) return
-    e.preventDefault()
-    const x0 = e.clientX
-    const w0 = widthRef.current
-    setDrag(true)
-    const move = (ev: PointerEvent) => setUserWidth(Math.round(Math.min(900, Math.max(160, w0 + ev.clientX - x0))))
-    const up = () => {
-      window.removeEventListener('pointermove', move, true)
-      window.removeEventListener('pointerup', up, true)
-      setDrag(false)
-      ctx.storage.set('explorerWidth', widthRef.current)
-    }
-    window.addEventListener('pointermove', move, true)
-    window.addEventListener('pointerup', up, true)
-  }
-
+/** The IDE window's columns. Each is its own app tile beside the chat, so the app's tab is its
+ *  drag handle; the chat stays the app's real chat. */
+export function ExplorerTile() {
   return (
-    <div className="hi-ide" data-drag={drag}>
+    <div className="hi-tile" data-tile="explorer">
       <Styles />
-      {!hidden && (
-        <>
-          <div className="hi-ide-side" style={{ width }}>
-            <Sidebar />
-          </div>
-          <div
-            className="hi-ide-sash"
-            onDoubleClick={() => {
-              setUserWidth(null)
-              ctx.storage.remove('explorerWidth')
-            }}
-            onPointerDown={startDrag}
-            role="separator"
-            title="Drag to resize the Explorer; double-click to reset"
-          />
-        </>
-      )}
-      <div className="hi-ide-main">
-        <EditorPane />
-      </div>
-      <Dialogs />
+      <Sidebar />
+    </div>
+  )
+}
+
+export function EditorTile() {
+  return (
+    <div className="hi-tile" data-tile="editor">
+      <Styles />
+      <EditorPane />
     </div>
   )
 }
@@ -827,8 +814,8 @@ export function EditorPane() {
           <span className="hi-spacer" />
           <button className="hi-btn" title="Add file to chat (Ctrl+L adds the selection)" onClick={() => void addToChat(activeTab.path)}>{icon('comment-discussion')}</button>
           <button className="hi-btn" title="Edit with Hermes (Ctrl+K)" onClick={() => post({ type: 'inlineEdit' })}>{icon('sparkle')}</button>
-          {/\.(html?|svg|md)$/i.test(activeTab.path) ? (
-            <button className="hi-btn" title="Open in Browser" onClick={() => void openInBrowser(activeTab.path)}>{icon('globe')}</button>
+          {/\.(html?|svg|md|pdf|png|jpe?g|gif|webp)$/i.test(activeTab.path) ? (
+            <button className="hi-btn" title="Open in Browser" onClick={() => openInBrowser(servedUrl(activeTab.path) ?? activeTab.path)}>{icon('globe')}</button>
           ) : null}
           <button className="hi-btn" title="Save (Ctrl+S)" onClick={saveActive}>{icon('save')}</button>
         </div>
@@ -874,6 +861,261 @@ function ReviewBanner({ path, banner }: { path: string; banner: NonNullable<Retu
   )
 }
 
+// ── Browser column: the project's UI (run by the IDE) or any page, with an element picker ────
+
+/** The page itself. Electron throws (synchronously) when a webview method runs before the guest
+ *  is attached and has emitted dom-ready, so navigations wait for it and the toolbar goes through
+ *  `guest()`, which returns null until then. */
+function Webview({ nav, onNav, onRef }: { nav: { url: string; at: number }; onNav: (u: string) => void; onRef: (el: any) => void }) {
+  const ref = useRef<any>(null)
+  const ready = useRef(false)
+  const pending = useRef<string | null>(null)
+  const [initial] = useState(nav.url) // later navigations go through loadURL: re-setting src would reload
+  const [fail, setFail] = useState<string | null>(null)
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const domReady = () => {
+      ready.current = true
+      onRef(el)
+      const u = pending.current
+      pending.current = null
+      if (u) el.loadURL(u).catch(() => undefined)
+    }
+    const navigated = (e: any) => {
+      if (e.isMainFrame === false) return
+      setFail(null)
+      onNav(e.url)
+    }
+    const failed = (e: any) => {
+      if (e.isMainFrame && e.errorCode !== -3) setFail(`${e.errorDescription || 'Load failed'} (${e.validatedURL})`)
+    }
+    el.addEventListener('dom-ready', domReady)
+    el.addEventListener('did-navigate', navigated)
+    el.addEventListener('did-navigate-in-page', navigated)
+    el.addEventListener('did-fail-load', failed)
+    // A fast (cached, local) page can be ready before this effect ran; a method only works then.
+    try {
+      el.getURL()
+      domReady()
+    } catch {
+      /* not ready yet: dom-ready will come */
+    }
+    return () => {
+      el.removeEventListener('dom-ready', domReady)
+      el.removeEventListener('did-navigate', navigated)
+      el.removeEventListener('did-navigate-in-page', navigated)
+      el.removeEventListener('did-fail-load', failed)
+      ready.current = false
+      onRef(null)
+    }
+  }, [])
+  useEffect(() => {
+    if (nav.url === initial && !ready.current) return // the first page loads from src
+    if (ready.current) ref.current?.loadURL(nav.url).catch(() => undefined)
+    else pending.current = nav.url
+  }, [nav.at])
+  return (
+    <>
+      {createElement('webview', { ref, src: initial, partition: 'persist:hermes-ide', webpreferences: 'contextIsolation=yes' })}
+      {fail ? (
+        <div className="hi-bempty">
+          <div>
+            {fail}
+            <div style={{ marginTop: 10 }}>
+              <Button size="sm" variant="secondary" onClick={() => { setFail(null); if (ready.current) ref.current?.reload() }}>Retry</Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </>
+  )
+}
+
+export function BrowserTile() {
+  const nav = useValue($browserNav)
+  const server = useValue($server)
+  const candidates = useValue($candidates)
+  const selectedId = useValue($selected)
+  const ask = useValue($askTrust)
+  const picking = useValue($picking)
+  const root = useValue($root)
+  const [url, setUrl] = useState(nav?.url ?? '')
+  const [input, setInput] = useState(nav?.url ?? '')
+  const [showLog, setShowLog] = useState(false)
+  const view = useRef<any>(null) // set once the page is ready for method calls
+  const guest = () => view.current
+  const isWebview = !!(window as any).hermesDesktop // Electron only; a browser-hosted Desktop has no webview tag
+
+  // A navigation request (the dev server came up, Open in Browser, the agent's ide_open).
+  useEffect(() => {
+    if (!nav) return
+    setInput(nav.url)
+    if (!url) setUrl(nav.url)
+  }, [nav?.at])
+
+  const go = (raw: string) => {
+    const target = addressToUrl(raw)
+    if (target) $browserNav.set({ url: target, at: Date.now() })
+  }
+
+  const cand = candidates.find(c => c.id === selectedId) ?? null
+  const state = server?.state
+  return (
+    <div className="hi-tile" data-tile="browser">
+      <Styles />
+      <div className="hi-bbar">
+        <button className="hi-btn" title="Back" disabled={!url} onClick={() => guest()?.goBack()}>{icon('arrow-left')}</button>
+        <button className="hi-btn" title="Forward" disabled={!url} onClick={() => guest()?.goForward()}>{icon('arrow-right')}</button>
+        <button className="hi-btn" title="Reload" disabled={!url} onClick={() => guest()?.reload()}>{icon('refresh')}</button>
+        <input
+          className="hi-url"
+          value={input}
+          placeholder={cand ? `Run ${cand.framework} or type an address` : 'Type an address, e.g. localhost:3000'}
+          spellCheck={false}
+          onChange={e => setInput(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') go(input); e.stopPropagation() }}
+        />
+        <button className="hi-btn" data-on={picking} title="Pick an element and send it to the chat" disabled={!url} onClick={() => void pickElement(guest())}>{icon('inspect')}</button>
+        <button className="hi-btn" title="Page DevTools" disabled={!url} onClick={() => guest()?.openDevTools()}>{icon('debug-console')}</button>
+        <button className="hi-btn" title="Open in your browser" disabled={!url} onClick={() => void ctx.os.openExternal?.(url)}>{icon('link-external')}</button>
+      </div>
+      {cand || server ? (
+        <div className="hi-bsub">
+          <button className="hi-pill" title={server ? `${server.command} · ${state}` : cand?.command} onClick={() => setShowLog(!showLog)}>
+            <span className="hi-led" data-s={state ?? 'idle'} />
+            <span>{cand?.framework ?? server?.framework}{cand?.rel ? ` · ${cand.rel}` : ''}</span>
+            <span className="hi-dim">{state === 'ready' ? 'running' : state === 'exited' ? (server?.exit_code ? `exited (${server.exit_code})` : 'stopped') : state ?? 'not running'}</span>
+          </button>
+          {candidates.length > 1 ? (
+            <select
+              className="hi-pill"
+              value={selectedId ?? ''}
+              title="Which UI to run"
+              onChange={e => $selected.set(e.target.value)}
+              style={{ background: 'none', border: '1px solid var(--hi-divider)' }}
+            >
+              {candidates.map(c => <option key={c.id} value={c.id}>{c.rel || c.name} ({c.framework})</option>)}
+            </select>
+          ) : null}
+          <span className="hi-spacer" />
+          {state === 'ready' || state === 'starting' || state === 'installing' ? (
+            <>
+              <button className="hi-pill" onClick={() => void restartUi()}>{icon('debug-restart', 13)} Restart</button>
+              <button className="hi-pill" onClick={() => void stopUi()}>{icon('debug-stop', 13)} Stop</button>
+            </>
+          ) : cand ? (
+            <button className="hi-pill" onClick={() => { trust(cand); void startUi() }}>{icon('play', 13)} {cand.installed ? 'Run' : 'Install & run'}</button>
+          ) : null}
+        </div>
+      ) : null}
+      {ask ? <TrustBanner cand={ask} /> : null}
+      {showLog && server ? <pre className="hi-log">{server.log.join('\n') || 'No output yet.'}</pre> : null}
+      <div className="hi-web">
+        {!isWebview ? (
+          <div className="hi-bempty">The Browser column needs the Hermes Desktop app.</div>
+        ) : url ? (
+          <Webview key={root ?? ''} nav={nav && nav.url ? nav : { url, at: 0 }} onRef={el => (view.current = el)} onNav={u => { setInput(u); setUrl(u) }} />
+        ) : (
+          <div className="hi-bempty">
+            <div>
+              {state === 'installing' ? 'Installing dependencies…' : state === 'starting' ? `Starting ${server?.framework}… the page opens when it is up.` : candidates.length ? `${cand?.framework} app found${cand?.rel ? ` in ${cand.rel}` : ''}.` : 'No page yet. Type an address above.'}
+              {!server && root && !candidates.length ? (
+                <div style={{ marginTop: 10 }}>
+                  <Button size="sm" variant="ghost" onClick={() => void detectProject(true)}>Look for a UI in this folder again</Button>
+                </div>
+              ) : null}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function TrustBanner({ cand }: { cand: Candidate }) {
+  return (
+    <div className="hi-banner">
+      {icon('shield')}
+      <span>
+        Found a {cand.framework} app{cand.rel ? ` in ${cand.rel}` : ''}. Run <code>{cand.command}</code>
+        {cand.installed ? '' : ' (installs dependencies first)'}? It runs this project's own code on the agent's machine.
+      </span>
+      <span className="hi-spacer" />
+      <Button size="xs" variant="secondary" onClick={() => { trust(cand); void startUi() }}>Always run for this project</Button>
+      <Button size="xs" variant="outline" onClick={() => void startUi()}>Run once</Button>
+      <Button size="xs" variant="ghost" onClick={() => $askTrust.set(null)}>Not now</Button>
+    </div>
+  )
+}
+
+// ── Title bar: column toggles (and the IDE window's dialogs, mounted once here) ───────────────
+
+const TOGGLES: Array<{ id: TileId | 'terminal'; icon: string; label: string }> = [
+  { id: 'explorer', icon: 'layout-sidebar-left', label: 'Explorer' },
+  { id: 'editor', icon: 'code', label: 'Editor' },
+  { id: 'browser', icon: 'globe', label: 'Browser' },
+  { id: 'terminal', icon: 'terminal', label: 'Terminal' }
+]
+
+export function LayoutToggles() {
+  const open = useValue($openTiles)
+  const terminal = useValue(useMemo(() => host.paneVisibility?.('terminal') ?? $openTiles, []))
+  return (
+    <span className="hi-toggles">
+      <Styles />
+      {TOGGLES.map(t => {
+        const on = t.id === 'terminal' ? terminal === true : open.includes(t.id)
+        return (
+          <button
+            key={t.id}
+            className="hi-toggle"
+            data-on={on}
+            aria-pressed={on}
+            title={`${on ? 'Hide' : 'Show'} ${t.label}`}
+            onClick={() => (t.id === 'terminal' ? ctx.runAction?.(on ? 'view.closeTerminal' : 'view.showTerminal') : toggleTile(t.id))}
+          >
+            {icon(t.icon, 15)}
+          </button>
+        )
+      })}
+      <Dialogs />
+    </span>
+  )
+}
+
+// ── Sidebar decoration: an IDE chat's row carries an IDE badge and opens the IDE window ──────
+
+export function IdeRowBadge({ sessionId }: { sessionId: string }) {
+  const chats = useValue($ideChats)
+  const ref = useRef<HTMLSpanElement>(null)
+  const isIde = !!chats[sessionId]
+  useLayoutEffect(() => {
+    // The row body: the nearest ancestor holding the row's title button (its real button), not
+    // the actions cluster. The slot may wrap the badge, so its parent is not enough.
+    let body = ref.current?.parentElement ?? null
+    while (body && !body.querySelector('button:not([data-row-actions] button)')) body = body.parentElement
+    if (!body || !isIde) return
+    // The row body's click resolver opens the chat as a tab; an IDE chat opens in its window.
+    // Modifier clicks (pin, open in a split) keep the app's meaning.
+    const onClick = (e: MouseEvent) => {
+      if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
+      if ((e.target as HTMLElement).closest('[data-row-actions], [data-reorder-handle]')) return
+      e.preventDefault()
+      e.stopPropagation()
+      void openIdeWindow({ sid: sessionId })
+    }
+    body.addEventListener('click', onClick, true)
+    return () => body.removeEventListener('click', onClick, true)
+  }, [isIde, sessionId])
+  if (!isIde) return null
+  return (
+    <span ref={ref} className="hi-ide-badge" data-ide-sid={sessionId} title="IDE chat: opens in the Hermes IDE window">
+      IDE
+    </span>
+  )
+}
+
 // ── Quick Open and Open Folder (mounted once, from the title bar's permanent slot) ───────────
 
 export function Dialogs() {
@@ -881,33 +1123,7 @@ export function Dialogs() {
     <>
       <QuickOpen />
       <FolderDialog />
-      <BrowserDialog />
     </>
-  )
-}
-
-function BrowserDialog() {
-  const target = useValue($browserTarget)
-  const isUrl = !!target && /^[a-z][a-z0-9+.-]*:\/\//i.test(target) && !target.startsWith('file:')
-  const text = !target ? '' : isUrl ? `[${target}](${target})` : `MEDIA:${/\s/.test(target) ? `"${target}"` : target}`
-  return (
-    <Dialog open={!!target} onOpenChange={o => !o && $browserTarget.set(null)}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Open in Browser</DialogTitle>
-        </DialogHeader>
-        <div className="hi-qo" onClickCapture={e => (e.target as HTMLElement).closest('a,button') && setTimeout(() => $browserTarget.set(null), 1500)}>
-          <div style={{ fontSize: 12.5, color: 'var(--ui-text-secondary)' }}>
-            Click to render it in the Desktop Browser beside the chat. Use the Browser's Annotate tool to pick elements on the page and send them to this chat.
-          </div>
-          {/* the card resolves the target asynchronously and drops the open if it unmounts first */}
-          {target ? <MessageTextContent text={text} /> : null}
-          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-            <Button variant="ghost" onClick={() => { ctx.runAction?.('view.showBrowser'); $browserTarget.set(null) }}>Show Browser</Button>
-          </div>
-        </div>
-      </DialogContent>
-    </Dialog>
   )
 }
 
@@ -1065,6 +1281,7 @@ export function SettingsPage() {
     <div>
       <ToggleRow label="Follow the chat's folder" description="The Explorer opens the working directory of the chat you are looking at." checked={s.followSession} onChange={v => setSetting('followSession', v)} />
       <ToggleRow label="Review agent edits" description="When Hermes edits an open file, show the change inline with Keep and Undo." checked={s.reviewAgentEdits} onChange={v => setSetting('reviewAgentEdits', v)} />
+      <ToggleRow label="Run the project's UI automatically" description="When the IDE opens a project you have trusted, start its dev server and show it in the Browser column." checked={s.autoRunUi} onChange={v => setSetting('autoRunUi', v)} />
       <ToggleRow label="Show hidden files" checked={s.showHidden} onChange={v => setSetting('showHidden', v)} />
       <ToggleRow label="Word wrap" checked={s.wordWrap} onChange={v => setSetting('wordWrap', v)} />
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 0' }}>
