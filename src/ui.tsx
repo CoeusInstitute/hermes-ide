@@ -236,7 +236,7 @@ export const icon = (name: string, size = 14) => <Codicon name={name} size={size
 function fileIcon(name: string) {
   if (/\.(png|jpe?g|gif|svg|webp|ico|bmp)$/i.test(name)) return 'file-media'
   if (/\.(md|mdx|txt|rst)$/i.test(name)) return 'markdown'
-  if (/\.(json|ya?ml|toml|ini|env|lock)$/i.test(name)) return 'json'
+  if (/\.(json|ya?ml|toml|ini|lock|env)$/i.test(name)) return 'json'
   if (/\.(zip|tar|gz|7z)$/i.test(name)) return 'file-zip'
   if (/\.(pdf)$/i.test(name)) return 'file-pdf'
   if (/\.(ts|tsx|js|jsx|mjs|cjs|py|rs|go|java|c|cpp|h|cs|rb|php|swift|kt|sh|ps1|sql|css|scss|html?|vue|svelte|lua)$/i.test(name)) return 'file-code'

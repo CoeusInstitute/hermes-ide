@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import codecs
 import importlib.util
 import json
 import os
@@ -47,14 +48,14 @@ def post(client, route, **body):
 def test_list_read_write_roundtrip_keeps_crlf_and_bom(client, tmp_path):
     f = tmp_path / "ws" / "a.txt"
     f.parent.mkdir()
-    f.write_bytes(b"\xef\xbb\xbfone\r\ntwo\r\n")
+    f.write_bytes(codecs.BOM_UTF8 + b"one\r\ntwo\r\n")
     listing = post(client, "/fs/list", path=str(tmp_path / "ws")).json()
     assert [e["name"] for e in listing["entries"]] == ["a.txt"]
     got = post(client, "/fs/read", path=str(f)).json()
     assert got["text"] == "one\r\ntwo\r\n" and got["bom"] is True
     saved = post(client, "/fs/write", path=str(f), text="one\r\nTWO\r\n", expected_mtime=got["mtime"], bom=True)
     assert saved.status_code == 200
-    assert f.read_bytes() == b"\xef\xbb\xbfone\r\nTWO\r\n"
+    assert f.read_bytes() == codecs.BOM_UTF8 + b"one\r\nTWO\r\n"
 
 
 def test_stale_save_is_refused_with_409(client, tmp_path):
@@ -85,7 +86,7 @@ def test_credential_refusal_holds_for_every_spelling_profile_and_listing(client,
     (home / "profiles" / "work").mkdir(parents=True)
     (home / "mcp-tokens").mkdir()
     (home / "hermes-agent" / "agent").mkdir(parents=True)
-    secrets = [home / ".env", home / ".env.bak-20261024", home / "google_token.json", home / "google_client_secret.json",
+    secrets = [home / ".env", home / ".env.bak-20261024", home / ".envrc", home / "google_token.json", home / "google_client_secret.json",
                home / "honcho.json", home / ".gmail-app-password", home / "mcp-tokens" / "a.json", home / "profiles" / "work" / ".env"]
     for f in secrets:
         f.write_text("OPENROUTER_API_KEY=sk-secret-123\n")

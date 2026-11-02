@@ -6,9 +6,9 @@ The catalog is a human-reviewed directory in [NousResearch/hermes-agent](https:/
 
 | Item | State |
 |---|---|
-| Catalog build passes `hermes plugins validate` | Yes (v0.6.0, tag `catalog-v0.6.0`) |
+| Catalog build passes `hermes plugins validate` | Yes (v0.6.1, tag `catalog-v0.6.1`) |
 | Desktop surface inside the SDK | Yes; one review warning, the window maximize (disclosed below) |
-| Security scan | `caution`, not `dangerous`: 35 `inline_shell_exec` hits, all inside CodeMirror's Lezer parse-table strings, and one `dump_all_env` hit on the credential-refusal pattern (see below) |
+| Security scan | `caution` (166 findings, 0 critical). No high finding in the plugin's own code. All 35 highs are one rule, `inline_shell_exec`, on CodeMirror's vendored Lezer grammar tables; the other 131 are medium or low (below). With hook request 5 (a one-line scanner change) the verdict is `safe` |
 | No private core imports, no core overrides | Yes |
 | Capabilities declared match registrations | Yes (`ide_open`; hook `pre_llm_call`; skill `hermes-ide:guide`) |
 | `requires_hermes` truthful and declared in `plugin.yaml` | `>=0.22.5`, the version both builds were verified on |
@@ -20,9 +20,9 @@ The catalog is a human-reviewed directory in [NousResearch/hermes-agent](https:/
 ## Steps for the owner
 
 1. Make the repository public (GitHub → Settings → General → Danger Zone → Change visibility). The full history was scanned on 2026-11-02 for committed keys (OpenRouter, OpenAI, GitHub, Supabase, AWS and Slack token formats, private-key blocks) with no hits, and no tracked file names a user folder; re-run the scan if commits land before you flip it.
-2. Confirm CI is green on the `catalog-v0.6.0` tag.
-3. On a checkout of the tag (`git checkout catalog-v0.6.0`): `hermes plugins validate . --install-deps` and read the output (expected below).
-4. Fork `NousResearch/hermes-agent`, add `plugin-catalog/hermes-ide.yaml` from [catalog/hermes-ide.yaml](catalog/hermes-ide.yaml) with `CATALOG_SHA` replaced by `git rev-parse catalog-v0.6.0^{commit}` (40 characters, in `sha` and the image URLs), and open the PR with the description below. Attach `docs/images/ide-window.png`.
+2. Confirm CI is green on the `catalog-v0.6.1` tag.
+3. On a checkout of the tag (`git checkout catalog-v0.6.1`): `hermes plugins validate . --install-deps` and read the output (expected below).
+4. Fork `NousResearch/hermes-agent`, add `plugin-catalog/hermes-ide.yaml` from [catalog/hermes-ide.yaml](catalog/hermes-ide.yaml) with `CATALOG_SHA` replaced by `git rev-parse catalog-v0.6.1^{commit}` (40 characters, in `sha` and the image URLs), and open the PR with the description below. Attach `docs/images/ide-window.png`.
 5. Wait for the catalog CI job (it clones the pinned commit and runs `hermes plugins validate`), answer review.
 6. Later releases: a SHA-bump PR changing `sha` and `version` together.
 
@@ -36,13 +36,24 @@ The catalog is a human-reviewed directory in [NousResearch/hermes-agent](https:/
 ✓ security scan — caution
 ✓ no core override — no runtime rebinds of Hermes core
 ✓ desktop surface — stays inside the plugin SDK surface
-⚠ security scan caution: inline_shell_exec (plugin.js:…) × 35
+⚠ security scan caution: inline_shell_exec (desktop/plugin.js:…) × 35, plus 131 medium/low (below)
 ⚠ desktop surface review (catalog rule 8): raw bridge window.hermesDesktop (plugin.js:…)
 Validation passed.
 ```
 
-- **`dump_all_env` caution (`dashboard/plugin_api.py:51`).** The line is `SECRET_RE`, the pattern the backend uses to *refuse* credential files (`.env`, `auth.json`, tokens, secrets, passwords); the scanner matches its words. Nothing reads or dumps the environment; dev servers get the gateway's environment *minus* anything credential-like (see the README's security section).
-- **`inline_shell_exec` cautions.** The scanner's pattern is the skill-markdown inline-shell syntax (`` !`…` ``). Every hit is inside a Lezer grammar table that CodeMirror's language packages ship as compressed strings (`stateData`, `goto`, `tokenData`, `states`); none is code. They appeared in 0.4 because the editor is now bundled as readable code instead of a minified `srcdoc` string. They were left as they are rather than rewritten to quiet the scanner.
+Every finding of the plugin scanner (`tools/plugin_guard.py`, what install, update and validate run) at this release, by source:
+
+| Where | Findings | What they are |
+|---|---|---|
+| `desktop/plugin.js`, vendored CodeMirror 6 and Lezer | 35 high `inline_shell_exec`, 10 `backtick_subshell` | Compressed grammar tables (`stateData`, `goto`, `tokenData`, `states`) of the 13 language packages; data strings, never executed |
+| same | 96 `js_char_code`, 4 `unicode_escape_chain`, 4 `hex_encoded_string` | Character handling in `@lezer/markdown`, `@codemirror/merge`, `view`, `state`, `search` and the language packages |
+| same | 1 `oversized_file` | The bundle is about 1.8 MB: an editor, 13 grammars and the diff view, unminified so it can be read |
+| `dashboard/plugin_api.py` | 7 `python_subprocess` | The plugin's real commands: `git status`/`git show`, `rg`, the system trash (`osascript`, `gio`), the trusted project's dev server and its stop (`taskkill`) |
+| `tests/` (stepped down by the scanner, as designed) | 7 | Fixtures the tests prove are refused (a `file:` URL to a system password file, a request id that climbs out of its folder), a Vite log line with a LAN address, binary bytes, a `git` call that builds a test repo |
+| `docs/DEVELOPING.md`, `.github/workflows/ci.yml` | 2 `uv_run` | The documented test command and CI |
+
+Earlier releases also had a high `dump_all_env` on the backend's credential-refusal pattern (a `.env` alternative followed by the regex's or-bar) and three BOM byte literals; 0.6.1 replaced them with an exact pattern and `codecs.BOM_UTF8`.
+- **`inline_shell_exec` cautions.** The rule looks for the skill-markdown inline-shell syntax (an exclamation mark followed by a backtick-quoted command), which only expands in a `SKILL.md` body. Every hit is inside a Lezer grammar table that CodeMirror's language packages ship as compressed strings (`stateData`, `goto`, `tokenData`, `states`) in `desktop/plugin.js`; none is code, and the plugin's one `SKILL.md` has no finding. They are left as they are rather than rewritten to quiet the scanner.
 - **The raw bridge call.** `window.hermesDesktop.windowControls.toggleMaximize()`, once per IDE window, in `maximizeOnce()` in `src/core.ts`. The app opens pop-outs at 420 px, which an IDE cannot use, and the SDK has no window verb. Hook request 4 below.
 
 ## PR description (draft)
@@ -61,9 +72,9 @@ Validation passed.
 > - Adds context to the model: a `pre_llm_call` hook appends a fixed note (about 800 characters, no user data) to the current turn of a chat whose IDE window is open, or whose message carries a picked element. Not persisted, system prompt untouched. The open windows are known from a lease file, `plugin-data/hermes-ide/ide-sessions.json` (chat ids and timestamps only).
 > - No network calls to third parties, no stored credentials, no telemetry.
 > - One raw bridge call: `windowControls.toggleMaximize` once per IDE window (no SDK window verb; the pop-out opens at 420 px).
-> - The security scan's `inline_shell_exec` cautions are CodeMirror Lezer parse-table strings; its `dump_all_env` caution is the credential-refusal pattern itself.
+> - Security scan: `caution`, 166 findings, no high in the plugin's own code. The 35 highs are `inline_shell_exec` on CodeMirror's vendored Lezer parse tables (a rule for `SKILL.md` bodies; the plugin's `SKILL.md` has no finding). Hook request 5 below proposes exempting that rule on code files.
 >
-> **Builds.** The pinned commit is the release's catalog build (tag `catalog-v0.6.0`, one commit on top of the release that swaps in the catalog bundle). The repository's `main` also has a full build with features that need the app's markup (a session-list group, column sizing, an own Browser webview); it is not part of this entry, lives in `src/full/`, and is tree-shaken from this bundle. Hook requests for those features are linked below.
+> **Builds.** The pinned commit is the release's catalog build (tag `catalog-v0.6.1`, one commit on top of the release that swaps in the catalog bundle). The repository's `main` also has a full build with features that need the app's markup (a session-list group, column sizing, an own Browser webview); it is not part of this entry, lives in `src/full/`, and is tree-shaken from this bundle. Hook requests for those features are linked below.
 >
 > Screenshots attached. Verified on Hermes 0.22.5 in a sandboxed Desktop over CDP (details in `docs/FEATURES.md`, Gates 0.4 and 0.5).
 
@@ -102,3 +113,12 @@ Each one would let a full-build feature move into the catalog build. The admissi
 **Proposal.** `host.window.maximize()` / `host.window.setBounds({ width, height })` for the calling window, refused for the main window or while the user is resizing.
 
 **Today.** One call to `window.hermesDesktop.windowControls.toggleMaximize()` (the catalog build's only bridge call).
+
+### 5. The plugin scanner: the inline-shell rule on code files
+
+**Need.** `inline_shell_exec` flags the skill-markdown inline-shell syntax, which only expands in a `SKILL.md` body. In a code file the same bytes are data: every plugin that bundles a Lezer-based CodeMirror ships dozens of them in its grammar tables, and each scores high, so the plugin cannot install without a caution prompt whatever its own code does.
+
+**Proposal.** Add `inline_shell_exec` to `CODE_EXEMPT_PATTERN_IDS` in `tools/plugin_guard.py`, next to the other patterns that are "meaningless inside code". A plugin's own `SKILL.md` is not a code file and keeps the rule at full severity. A ready patch with a regression test (it fails on today's scanner and passes with the change) is kept outside this repository.
+
+**Effect, measured on this release.** Today: `caution`, 166 findings (35 high). With the change: `safe`, 131 medium or low; a hostile inline-shell line in a bundled `SKILL.md` is still flagged high.
+

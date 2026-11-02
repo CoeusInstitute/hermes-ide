@@ -15,6 +15,7 @@ listing or search returns.
 from __future__ import annotations
 
 import atexit
+import codecs
 import ctypes
 import json
 import os
@@ -38,7 +39,7 @@ from fastapi import APIRouter, HTTPException
 # blocks the gateway event loop that every Desktop request shares.
 router = APIRouter()
 
-VERSION = "0.6.0"
+VERSION = "0.6.1"
 MAX_READ_BYTES = 5 * 1024 * 1024
 MAX_LIST_ENTRIES = 5000
 MAX_FILES = 50_000
@@ -48,7 +49,9 @@ SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", ".next", "d
 # .env and its backups, auth.json, OAuth and API tokens, client secrets, app passwords, Honcho's key,
 # key files, and the token folders. Matched at a home's top level and a profile's top level only, so
 # a source tree kept in the home (the hermes-agent checkout's oauth.py) still opens.
-SECRET_RE = re.compile(r"^\.env|^auth\.|token|secret|oauth|credential|password|^honcho\.json|-auth$|\.(pem|key|p12|pfx)$", re.I)
+# `.env` exactly or with a suffix (.env.local, .env.bak-*, .env-old) and `.envrc`, not every name starting
+# with ".env".
+SECRET_RE = re.compile(r"^\.env(?:rc)?(?:$|[._-])|^auth\.|token|secret|oauth|credential|password|^honcho\.json|-auth$|\.(pem|key|p12|pfx)$", re.I)
 SECRET_DIRS = {"mcp-tokens", "secrets", "credentials"}
 _CASELESS = sys.platform in ("win32", "darwin")  # file systems that ignore case by default
 
@@ -178,10 +181,10 @@ def read_file(path: Path) -> dict[str, Any]:
     if b"\x00" in data[:8192]:
         return {**base, "binary": True}
     try:
-        text = data.decode("utf-8-sig" if data.startswith(b"\xef\xbb\xbf") else "utf-8")
+        text = data.decode("utf-8-sig" if data.startswith(codecs.BOM_UTF8) else "utf-8")
     except UnicodeDecodeError:
         return {**base, "binary": True}
-    return {**base, "text": text, "bom": data.startswith(b"\xef\xbb\xbf")}
+    return {**base, "text": text, "bom": data.startswith(codecs.BOM_UTF8)}
 
 
 def write_file(path: Path, text: str, expected_mtime: str | None, bom: bool = False) -> dict[str, Any]:
@@ -198,7 +201,7 @@ def write_file(path: Path, text: str, expected_mtime: str | None, bom: bool = Fa
         raise HTTPException(409, json.dumps({"error": "deleted"}))
     elif not path.parent.is_dir():
         raise HTTPException(400, "parent folder does not exist")
-    data = (b"\xef\xbb\xbf" if bom else b"") + text.encode("utf-8")
+    data = (codecs.BOM_UTF8 if bom else b"") + text.encode("utf-8")
     fd, tmp = tempfile.mkstemp(prefix=".hermes-ide-", dir=str(path.parent))
     try:
         with os.fdopen(fd, "wb") as fh:

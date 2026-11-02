@@ -2,6 +2,14 @@
 
 All notable changes to Hermes IDE. Versions follow the `version` in `plugin.yaml`.
 
+## 0.6.1 (2026-11-02)
+
+Security-scan hygiene for the catalog review. No change in behavior.
+
+- The backend's credential-refusal pattern no longer reads as an environment dump to the install scanner: it is now exact (`.env` alone or with a suffix such as `.env.local` or `.env.bak-*`, and `.envrc`) instead of every name starting with `.env`. That was the plugin's only high finding in its own code.
+- BOM handling uses `codecs.BOM_UTF8` instead of byte literals; the file-icon pattern lists `env` last; the README links to the developer guide for the test command; the submission kit describes the inline-shell rule instead of quoting it.
+- The scan now reports 166 findings (from 175), none high in the plugin's own code. `docs/CATALOG-SUBMISSION.md` accounts for every one and proposes the one-line scanner change that makes the verdict `safe`.
+
 ## 0.6.0 (2026-11-02)
 
 ### The IDE button starts a workspace

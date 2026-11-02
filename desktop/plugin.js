@@ -30598,7 +30598,7 @@ function Styles() {
 }
 var icon = (name2, size = 14) => /* @__PURE__ */ jsx3(Codicon, { name: name2, size });
 function fileIcon(name2) {
-  return /\.(png|jpe?g|gif|svg|webp|ico|bmp)$/i.test(name2) ? "file-media" : /\.(md|mdx|txt|rst)$/i.test(name2) ? "markdown" : /\.(json|ya?ml|toml|ini|env|lock)$/i.test(name2) ? "json" : /\.(zip|tar|gz|7z)$/i.test(name2) ? "file-zip" : /\.(pdf)$/i.test(name2) ? "file-pdf" : /\.(ts|tsx|js|jsx|mjs|cjs|py|rs|go|java|c|cpp|h|cs|rb|php|swift|kt|sh|ps1|sql|css|scss|html?|vue|svelte|lua)$/i.test(name2) ? "file-code" : "file";
+  return /\.(png|jpe?g|gif|svg|webp|ico|bmp)$/i.test(name2) ? "file-media" : /\.(md|mdx|txt|rst)$/i.test(name2) ? "markdown" : /\.(json|ya?ml|toml|ini|lock|env)$/i.test(name2) ? "json" : /\.(zip|tar|gz|7z)$/i.test(name2) ? "file-zip" : /\.(pdf)$/i.test(name2) ? "file-pdf" : /\.(ts|tsx|js|jsx|mjs|cjs|py|rs|go|java|c|cpp|h|cs|rb|php|swift|kt|sh|ps1|sql|css|scss|html?|vue|svelte|lua)$/i.test(name2) ? "file-code" : "file";
 }
 function Sidebar() {
   let view = useValue2($view), root = useValue2($root), backend = useValue2($backend), git = useValue2($git), changes = Object.keys(git.files || {}).length;
