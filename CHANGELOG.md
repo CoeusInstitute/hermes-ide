@@ -2,6 +2,12 @@
 
 All notable changes to Hermes IDE. Versions follow the `version` in `plugin.yaml`.
 
+## 0.6.3 (2026-11-02)
+
+- **A file opened later docks the editor beside the Explorer at a usable width.** A new IDE workspace saves its fitted Explorer, Browser and Chat widths before any file is open. Opening a file then docked the editor just left of the chat and re-applied the page and chat widths as if you had chosen them, which left the editor at its 385 px floor. The editor now goes where the default order has it (right of the Explorer), and saved widths carry over only to the same set of columns; the Explorer's always does. Measured live at 3840 px: Explorer 345, Editor 1421, Browser 1230, Chat 845.
+- **README rebuilt**: banner, badges, quick start, features with screenshots of a real session (an element picked, the agent's edit under review, the page updated), table of contents, roadmap and contributing notes.
+- **Screenshots replaced.** The previous `ide-window.png` and `agent-edit-review.png` showed local file paths with a user name; `browser-annotate.png` (unused) is removed for the same reason. The new images come from a demo project at a neutral path.
+
 ## 0.6.2 (2026-11-02)
 
 - **The install scan is `safe`, so installing from Git no longer asks or blocks.** The editor's Lezer grammars carried their parse tables as packed strings, and Hermes' scanner read 35 of them as inline-shell snippets (high), which made a fresh Git install impossible without `--force`. The build now decodes those tables into the integer arrays the parser builds from them at startup anyway (`dev/lezer-tables.mjs`). Every grammar's tables and parse trees are tested against the package's own (`tests/lezer-tables.test.mjs`), and syntax highlighting through the bundled path was compared span by span for TSX, JavaScript, CSS, HTML, Python, JSON, Rust and YAML. Scan: 0 critical, 0 high, 121 medium or low notes.

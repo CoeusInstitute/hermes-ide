@@ -6,7 +6,7 @@ The catalog is a human-reviewed directory in [NousResearch/hermes-agent](https:/
 
 | Item | State |
 |---|---|
-| Catalog build passes `hermes plugins validate` | Yes (v0.6.2, tag `catalog-v0.6.2`) |
+| Catalog build passes `hermes plugins validate` | Yes (v0.6.3, tag `catalog-v0.6.3`) |
 | Desktop surface inside the SDK | Yes; one review warning, the window maximize (disclosed below) |
 | Security scan | `safe` (0 critical, 0 high; 121 medium or low notes, accounted for below). Installs from Git proceed without a prompt |
 | No private core imports, no core overrides | Yes |
@@ -20,9 +20,9 @@ The catalog is a human-reviewed directory in [NousResearch/hermes-agent](https:/
 ## Steps for the owner
 
 1. Make the repository public (GitHub → Settings → General → Danger Zone → Change visibility). The full history was scanned on 2026-11-02 for committed keys (OpenRouter, OpenAI, GitHub, Supabase, AWS and Slack token formats, private-key blocks) with no hits, and no tracked file names a user folder; re-run the scan if commits land before you flip it.
-2. Confirm CI is green on the `catalog-v0.6.2` tag.
-3. On a checkout of the tag (`git checkout catalog-v0.6.2`): `hermes plugins validate . --install-deps` and read the output (expected below).
-4. Fork `NousResearch/hermes-agent`, add `plugin-catalog/hermes-ide.yaml` from [catalog/hermes-ide.yaml](catalog/hermes-ide.yaml) with `CATALOG_SHA` replaced by `git rev-parse catalog-v0.6.2^{commit}` (40 characters, in `sha` and the image URLs), and open the PR with the description below. Attach `docs/images/ide-window.png`.
+2. Confirm CI is green on the `catalog-v0.6.3` tag.
+3. On a checkout of the tag (`git checkout catalog-v0.6.3`): `hermes plugins validate . --install-deps` and read the output (expected below).
+4. Fork `NousResearch/hermes-agent`, add `plugin-catalog/hermes-ide.yaml` from [catalog/hermes-ide.yaml](catalog/hermes-ide.yaml) with `CATALOG_SHA` replaced by `git rev-parse catalog-v0.6.3^{commit}` (40 characters, in `sha` and the image URLs), and open the PR with the description below. Attach `docs/images/ide-window.png`.
 5. Wait for the catalog CI job (it clones the pinned commit and runs `hermes plugins validate`), answer review.
 6. Later releases: a SHA-bump PR changing `sha` and `version` together.
 
@@ -72,7 +72,7 @@ Since 0.6.2 the build decodes the Lezer grammars' packed parse tables into the t
 > - One raw bridge call: `windowControls.toggleMaximize` once per IDE window (no SDK window verb; the pop-out opens at 420 px).
 > - Security scan: `safe` (no critical or high finding; 121 medium or low notes, mostly character handling in the bundled CodeMirror, plus the backend's real subprocess calls and test fixtures). The build ships the editor's Lezer parse tables decoded, as integer arrays, instead of the packed strings the scanner read as inline shell.
 >
-> **Builds.** The pinned commit is the release's catalog build (tag `catalog-v0.6.2`, one commit on top of the release that swaps in the catalog bundle). The repository's `main` also has a full build with features that need the app's markup (a session-list group, column sizing, an own Browser webview); it is not part of this entry, lives in `src/full/`, and is tree-shaken from this bundle. Hook requests for those features are linked below.
+> **Builds.** The pinned commit is the release's catalog build (tag `catalog-v0.6.3`, one commit on top of the release that swaps in the catalog bundle). The repository's `main` also has a full build with features that need the app's markup (a session-list group, column sizing, an own Browser webview); it is not part of this entry, lives in `src/full/`, and is tree-shaken from this bundle. Hook requests for those features are linked below.
 >
 > Screenshots attached. Verified on Hermes 0.22.5 in a sandboxed Desktop over CDP (details in `docs/FEATURES.md`, Gates 0.4 and 0.5).
 

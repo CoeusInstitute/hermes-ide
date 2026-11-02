@@ -1,23 +1,105 @@
-# Hermes IDE
+<a id="readme-top"></a>
 
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Hermes](https://img.shields.io/badge/Hermes-%E2%89%A50.22.5-informational.svg)](https://hermes-agent.nousresearch.com/docs/user-guide/desktop)
-[![CI](https://github.com/CoeusInstitute/hermes-ide/actions/workflows/ci.yml/badge.svg)](https://github.com/CoeusInstitute/hermes-ide/actions/workflows/ci.yml)
+<p align="center">
+  <img src="docs/images/banner.svg" alt="Hermes IDE: a Cursor-style IDE for Hermes Desktop" width="100%">
+</p>
 
-A Cursor-style IDE for [Hermes Desktop](https://hermes-agent.nousresearch.com/docs/user-guide/desktop), shipped as one installable Hermes plugin.
+<p align="center">
+  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/version-0.6.3-6366f1?style=flat-square" alt="Version 0.6.3"></a>
+  <a href="https://hermes-agent.nousresearch.com/docs/user-guide/desktop"><img src="https://img.shields.io/badge/Hermes-%E2%89%A50.22.5-4b5280?style=flat-square" alt="Requires Hermes 0.22.5 or newer"></a>
+  <a href="https://github.com/CoeusInstitute/hermes-ide/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/CoeusInstitute/hermes-ide/ci.yml?branch=main&style=flat-square&label=CI" alt="CI status"></a>
+  <a href="#security-and-privacy"><img src="https://img.shields.io/badge/install%20scan-safe-2f8a57?style=flat-square" alt="Install scan: safe"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-4b5280?style=flat-square" alt="MIT license"></a>
+</p>
 
-Press **Ctrl+Alt+I** in any chat and that chat opens in its own IDE window: an Explorer, a tabbed code editor and your project's running UI, beside the chat itself. The window is the app's own single-chat pop-out, so the chat in it is the real session, not a copy, and your main window is never rearranged.
+<p align="center">
+  <b>Your code, your running app and the agent in one window, built on the chat you already have.</b>
+  <br>
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#features">Features</a> ·
+  <a href="#usage">Usage</a> ·
+  <a href="#security-and-privacy">Security</a> ·
+  <a href="docs/ARCHITECTURE.md">Architecture</a> ·
+  <a href="CHANGELOG.md">Changelog</a>
+</p>
 
-![The IDE window: the project UI view running a static site, index.html in the editor, and the chat with an element picked from the page](docs/images/ide-window.png)
+<p align="center">
+  <img src="docs/images/ide-window.png" alt="The Hermes IDE window: Explorer, styles.css with the agent's edit under review, the project's running Vite app, and the chat holding two elements picked from the page" width="100%">
+</p>
 
-## What you get
+<details>
+<summary><b>Table of contents</b></summary>
 
-- **One chat, one IDE window.** Explorer, Search, Source Control, a CodeMirror 6 editor with tabs, Quick Open (Ctrl+P) and the session chat, in columns you drag into any arrangement with the app's own pane dragging.
-- **The editor talks to the chat.** Ctrl+L sends the selection as an `@file:path:from-to` reference, Ctrl+K asks Hermes to edit the selected lines in place, and when the agent edits an open file you review the change inline with **Keep** and **Undo**.
-- **Your project's UI, one click away.** The IDE finds the web UI in the open folder (Vite, Next.js, Nuxt, Remix, SvelteKit, Astro, Angular, Create React App and more, monorepos included, or a static `index.html`), asks once before running its code, starts the dev server, and opens the page in the app's Browser.
-- **Pick an element, hand it to the agent.** Click anything on the running page and the chat gets its selector, size, text, markup, key styles and the source lines that most likely render it.
-- **The session is the unit.** The open folder and the editor tabs belong to the chat, so reopening the IDE for a chat brings back its folder and files. IDE chats carry an **IDE** badge in the session list.
-- **The agent can drive it.** The `ide_open` tool opens a file at a line in that chat's IDE window.
+- [About](#about)
+- [Features](#features)
+- [Quick start](#quick-start)
+- [Install](#install)
+- [Usage](#usage)
+  - [Start a project](#start-a-project)
+  - [Columns](#columns)
+  - [Editor](#editor)
+  - [Project UI](#project-ui)
+  - [Pick an element](#pick-an-element)
+  - [IDE chats](#ide-chats)
+  - [The agent and the IDE](#the-agent-and-the-ide)
+- [Two builds of one source](#two-builds-of-one-source)
+- [Security and privacy](#security-and-privacy)
+- [Known limits](#known-limits)
+- [How it fits together](#how-it-fits-together)
+- [Develop](#develop)
+- [Roadmap](#roadmap)
+- [Contributing](#contributing)
+- [Acknowledgements](#acknowledgements)
+- [License](#license)
+
+</details>
+
+## About
+
+Hermes IDE turns any [Hermes Desktop](https://hermes-agent.nousresearch.com/docs/user-guide/desktop) chat into a Cursor-style workspace, shipped as one installable Hermes plugin.
+
+Each chat gets its own IDE window: an Explorer, a tabbed code editor and your project's running UI, docked beside the chat itself. The window is the app's own single-chat pop-out, so the chat in it is the real session, not a copy, and your main window is never rearranged.
+
+It is built for front-end and full-stack work. Point at an element on the running page, say what you want, and review the agent's edit inline while the page updates beside it.
+
+## Features
+
+|  |  |
+|---|---|
+| **One chat, one IDE window** | Explorer, Search, Source Control, a CodeMirror 6 editor with tabs, Quick Open (Ctrl+P) and the session chat, in columns you drag into any arrangement. |
+| **Your project's UI, one click away** | Finds the web UI in the open folder (Vite, Next.js, Nuxt, Remix, SvelteKit, Astro, Angular, Create React App and more, monorepos included, or a static `index.html`), asks once before running its code, starts the dev server and shows the page. |
+| **Pick an element, hand it to the agent** | Click anything on the running page. The composer gets a one-line token; the agent gets the selector, size, text, markup, key styles, the component chain and the source lines that most likely render it. |
+| **Review every agent edit inline** | When the agent edits an open file, the tab shows a diff against the text before the turn. Accept or reject single hunks, or **Keep** and **Undo** the whole edit. |
+| **The editor talks to the chat** | Ctrl+L sends the selection as an `@file:path:from-to` reference. Ctrl+K asks Hermes to edit the selected lines in place. |
+| **The session is the unit** | The folder, tabs and layout belong to the chat. Reopening a chat's IDE brings them back, and IDE chats are marked in the session list. |
+| **The agent can drive it** | The `ide_open` tool opens a file at a line, shows a page, or runs the project's UI. A bundled skill teaches the agent how the IDE works. |
+
+**Pick an element.** One short token in the composer, written around like any other words:
+
+<p align="center">
+  <img src="docs/images/element-pick-token.png" alt="The composer holding the token [[ element 2 · &lt;h1&gt; &quot;Launch checklist&quot; ]] followed by the request: make this heading bigger and bolder" width="640">
+</p>
+
+When you send, each token becomes a full description between `[[` and `]]`, and the agent works from it. Below, two picks and two edits, each checked against the running dev server:
+
+<table>
+  <tr>
+    <td width="45%" valign="top"><img src="docs/images/element-pick-chat.png" alt="Two picked-element blocks in the chat, each followed by the agent's edit to styles.css, a curl check against the dev server and a summary of what changed and what it skipped"></td>
+    <td valign="top">
+      <b>Review the edit where it landed.</b> The agent's change to <code>styles.css</code> opens as an inline diff, with <b>Accept</b> and <b>Reject</b> per hunk and <b>Keep</b> or <b>Undo</b> for the whole edit:
+      <br><br>
+      <img src="docs/images/agent-edit-review.png" alt="The editor showing styles.css with the banner 'Hermes edited this file. Review the changes inline', Keep and Undo buttons, and an Accept and Reject pair on the changed h1 rule">
+    </td>
+  </tr>
+</table>
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+## Quick start
+
+1. In Hermes Desktop, open **Capabilities → Plugins → Install from Git**, enter `CoeusInstitute/hermes-ide` and click **Install**.
+2. Click **IDE** in the status bar. A new IDE workspace opens and asks for a project folder.
+3. Pick a folder with a web app, choose **Always run for this project**, then click the inspect button above the page, click an element and tell the chat what to change.
 
 ## Install
 
@@ -33,35 +115,36 @@ hermes plugins install CoeusInstitute/hermes-ide --enable
 
 A terminal install enables the agent half only. Restart Hermes Desktop if it was open, then search `Hermes IDE` under **Capabilities → Plugins** and switch **Desktop: Hermes IDE** on.
 
-**Update.** **Capabilities → Plugins** offers updates, or run `hermes plugins update hermes-ide`. An update that changes the backend (as 0.4 does) loads on the next gateway start: run `hermes gateway restart`, or restart the app. The project UI view says so when it finds the gateway still on the previous backend.
+<details>
+<summary><b>Update</b></summary>
 
-**Uninstall.** Run `hermes plugins remove hermes-ide`, then delete `desktop-plugins/hermes-ide` in your Hermes home (`%LOCALAPPDATA%\hermes` on Windows, `~/.hermes` elsewhere); the running app unloads the desktop half when that folder goes. A few small settings stay in the app's storage (tab lists, column layout, trusted projects, the IDE chat list) and are reused if you reinstall.
+**Capabilities → Plugins** offers updates, or run `hermes plugins update hermes-ide`. An update that changes the backend loads on the next gateway start: run `hermes gateway restart`, or restart the app. The IDE says so when it finds the gateway still on the previous backend.
 
-### Two builds of one source
+</details>
 
-| | Catalog build | Full build |
-|---|---|---|
-| Where | a tagged commit per release (`catalog-v0.6.2`), pinned by the Hermes plugin catalog | `main` (what **Install from Git** gets) |
-| Surface | the Desktop plugin SDK only: passes `hermes plugins validate` | the SDK plus a few reads of the app's own markup |
-| Explorer | a resizable panel inside the Editor column | its own column |
-| Project UI | a **Run** view beside Explorer, Search and Source Control; the page opens in the app's Browser pane | a Browser column of its own (address bar, DevTools, the page) |
-| IDE chats | an **IDE** badge on their rows (click it to open the IDE) and an IDE chats menu on the status-bar button | the same, plus an **IDE** group under SESSIONS and a plain click on the row opening the IDE |
-| Column widths | the app's split; your resizes are kept while the window is open | fitted on open and remembered per chat |
+<details>
+<summary><b>Uninstall</b></summary>
 
-The full build exists because the SDK has no hook yet for a session-list group, for sizing a split, or for pointing the app's Browser at an address. Those hooks are requested upstream; as each lands, its feature moves into the catalog build. Build either one with `npm run build` (catalog) or `npm run build:full` in `dev/`.
+Run `hermes plugins remove hermes-ide`, then delete `desktop-plugins/hermes-ide` in your Hermes home (`%LOCALAPPDATA%\hermes` on Windows, `~/.hermes` elsewhere); the running app unloads the desktop half when that folder goes. A few small settings stay in the app's storage (tab lists, column layout, trusted projects, the IDE chat list) and are reused if you reinstall.
 
-## Use
+</details>
 
-- **Start a project:** click **IDE** in the status bar. A new IDE workspace opens in its own window and asks for the project folder: pick one, or type a new path and choose **Create folder**. The workspace is a new chat that works in that folder, named after it, and listed with your IDE chats.
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+## Usage
+
+### Start a project
+
+- **New workspace:** click **IDE** in the status bar. A new IDE workspace opens in its own window and asks for the project folder: pick one, or type a new path and choose **Create folder**. The workspace is a new chat that works in that folder, takes the folder's name after its first message, and is listed with your IDE chats.
 - **Open the chat you are in:** press **Ctrl+Alt+I**, or run **IDE: Open in IDE Window** from the command palette. The chat needs one message first, because a draft has no session yet. If the chat already has a plain pop-out window, that window turns into the IDE.
 
-The IDE window maximizes, hides the session list (it holds one chat), and opens its columns beside the chat: the Explorer first (300 px at most), the Editor with the first file you open. With the project's page open and no editor, the page gets a little more room than the chat (about 53 to 47).
+The IDE window maximizes, hides the session list (it holds one chat) and opens its columns beside the chat: the Explorer first (300 px at most), then the project's page, a little wider than the chat. The Editor opens beside the Explorer with the first file you open, and the columns rebalance so the editor gets the most room.
 
 ### Columns
 
 - **Rearrange** by dragging a column's tab to any edge of another column, or onto its middle to stack them as tabs. This is the app's own pane dragging.
 - **Show or hide** columns with the toggles at the top right of the IDE window, or the **IDE: Toggle … Column** commands. Ctrl+B in the editor toggles the Explorer.
-- **Resize** by dragging any seam. In the catalog build, drag the line between the Explorer panel and the editor (double-click it for the default width; arrow keys move it when it has focus).
+- **Resize** by dragging any seam. Widths are remembered per chat and per set of open columns. In the catalog build, drag the line between the Explorer panel and the editor (double-click it for the default width; arrow keys move it when it has focus).
 - **IDE: Reset Column Layout** goes back to the default.
 
 Every column's first bar is the same height, so the rows line up across the window.
@@ -84,9 +167,7 @@ Outside the editor the same commands have palette entries (`IDE: …`) and rebin
 
 The editor runs in its own document inside the IDE, so the app's global shortcuts never take Ctrl+D, Ctrl+F, Ctrl+K or Ctrl+P from it. Unsaved text is mirrored to plugin storage, so a crash or reload never loses it; if the agent changed the file meanwhile, the IDE shows both versions instead of overwriting either.
 
-**Agent edits.** When Hermes edits an open file, the tab reloads with an inline diff against the text before the turn. Accept or reject single hunks, or use **Keep** and **Undo** for the whole edit. If you had unsaved changes, you get **Compare**, **Use Disk Version** and **Overwrite with Mine** instead, and nothing is lost. Renaming a file or folder in the Explorer carries its open tabs along, unsaved edits included.
-
-![Agent edit review](docs/images/agent-edit-review.png)
+**Agent edits.** When Hermes edits a file that is open, the tab reloads with an inline diff against the text before the turn. Accept or reject single hunks, or use **Keep** and **Undo** for the whole edit. If you had unsaved changes, you get **Compare**, **Use Disk Version** and **Overwrite with Mine** instead, and nothing is lost. Renaming a file or folder in the Explorer carries its open tabs along, unsaved edits included.
 
 ### Project UI
 
@@ -97,16 +178,18 @@ When the IDE opens a folder, it looks for a web UI: a `package.json` whose dev s
 - The URL comes from the dev server's own output, so a different port is picked up. The status row shows the state; click it for the live log, which also opens by itself when a server exits with an error. **Restart** and **Stop** sit beside it.
 - The dev server belongs to the IDE window: two minutes after the last IDE window that asked about it closes, the backend stops it and its child processes.
 
-**Catalog build.** The project's controls are the Explorer panel's **Run** view (the ▶ tab; a dot on it means a UI was found or is running). When the server is up, click **Open localhost:… in the Browser**: the page opens in the app's own Browser pane (Ctrl+click opens your system browser). The plugin SDK cannot point that Browser at an address by itself, so this one click is yours.
-
 **Full build.** The page shows in the IDE's own Browser column, with an address bar, back, forward, reload, DevTools and **Open externally**.
 
-**Pick an element** with the inspect button (or **IDE: Pick Element in Browser**): hover the page, click an element, and the composer gets one short token for it, such as `[[ element 3 · <button.cta-button> "Mark all done" ]]`. Pick as many as you like and write around them. When you send, each token becomes the element's full description, between `[[` and `]]` so the model sees where each element starts and ends:
+**Catalog build.** The project's controls are the Explorer panel's **Run** view (the ▶ tab; a dot on it means a UI was found or is running). When the server is up, click **Open localhost:… in the Browser**: the page opens in the app's own Browser pane (Ctrl+click opens your system browser). The plugin SDK cannot point that Browser at an address by itself, so this one click is yours.
+
+### Pick an element
+
+Click the inspect button above the page (or run **IDE: Pick Element in Browser**), hover the page and click an element. The composer gets one short token for it, such as `[[ element 3 · <button.cta-button> "Mark all done" ]]`. Pick as many as you like and write around them. When you send, each token becomes the element's full description, between `[[` and `]]` so the model sees where each element starts and ends:
 
 ```
 [[ Element picked in the IDE browser (http://localhost:5173/):
-- selector: `button.cta-button` (<button> 108×31), text "Mark all done"
-- component: App › TaskList › DoneButton (React)
+- selector: `button.cta-button` (<button> 420×39), text "Mark all done"
+- component: App › DoneButton (React)
 - attributes: type="button"
 - html: `<button class="cta-button" type="button">Mark all done</button>`
 - styles: display: inline-block; color: rgb(255, 255, 255); background-color: rgb(99, 102, 241); ...
@@ -126,16 +209,31 @@ A chat becomes an IDE chat the first time it opens in an IDE window. Its row in 
 
 The full build also lists IDE chats in their own **IDE** group under SESSIONS (in the date-grouped list), takes them out of the date groups, and opens the IDE on a plain click anywhere on the row. Its **+** starts a new IDE workspace.
 
-### The agent drives the IDE
+### The agent and the IDE
 
-Ask the chat to "open the project's UI in the IDE browser" and the agent calls `ide_open` with `ui: true`: the IDE detects the project's UI, runs its dev server with its own manager (asking you first if you have not trusted the project; click **Always run** or **Run once** while it waits) and shows the page. The agent never starts a dev server of its own for the IDE, so nothing is left running in the chat.
+**The agent drives the IDE.** Ask the chat to "open the project's UI in the IDE browser" and the agent calls `ide_open` with `ui: true`: the IDE detects the project's UI, runs its dev server with its own manager (asking you first if you have not trusted the project; click **Always run** or **Run once** while it waits) and shows the page. The agent never starts a dev server of its own for the IDE, so nothing is left running in the chat.
 
 `ide_open` with a `path` (and optional `line`) opens a file in that chat's IDE window; with a `url`, a page that is already running. The IDE window opens when needed, and the tool waits for its answer: `running` (with the URL), `needs_trust`, `starting`, `opened`, `no_ui`, `no_folder`, `error`, or `no_window` when no Hermes IDE window answered. In the catalog build the page goes to the app's Browser pane through the agent's built-in `desktop_preview` tool (action `open`).
 
-### Your agent knows about the IDE
+**The agent knows about the IDE.**
 
 - While a chat's IDE window is open, each turn in that chat carries a short **[Hermes IDE]** note: the message comes from the IDE, what the user sees beside the chat, what a `[[ Element picked … ]]` block is, and which tools put things in front of them. The note is added to that turn only. It is not stored in the transcript and does not change the system prompt, so the prompt cache is untouched. A message that carries a picked element gets the note even after the window closes.
 - The plugin bundles a skill, **`hermes-ide:guide`**, listed in the agent's skill index while the plugin is enabled: how the IDE works, how to answer an element pick (find the source, change it rather than built output), and what the user sees after an edit.
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+## Two builds of one source
+
+|  | Catalog build | Full build |
+|---|---|---|
+| Where | a tagged commit per release (`catalog-v0.6.3`), pinned by the Hermes plugin catalog | `main` (what **Install from Git** gets) |
+| Surface | the Desktop plugin SDK only: passes `hermes plugins validate` | the SDK plus a few reads of the app's own markup |
+| Explorer | a resizable panel inside the Editor column | its own column |
+| Project UI | a **Run** view beside Explorer, Search and Source Control; the page opens in the app's Browser pane | a Browser column of its own (address bar, DevTools, the page) |
+| IDE chats | an **IDE** badge on their rows (click it to open the IDE) and an IDE chats menu on the status-bar button | the same, plus an **IDE** group under SESSIONS and a plain click on the row opening the IDE |
+| Column widths | the app's split; your resizes are kept while the window is open | fitted on open and remembered per chat |
+
+The full build exists because the SDK has no hook yet for a session-list group, for sizing a split, or for pointing the app's Browser at an address. Those hooks are requested upstream; as each lands, its feature moves into the catalog build. Build either one with `npm run build` (catalog) or `npm run build:full` in `dev/`.
 
 ## Security and privacy
 
@@ -154,7 +252,8 @@ What the plugin does on your machines, so you can decide before installing:
 
 ## Known limits
 
-- Catalog build: the Explorer is a panel inside the Editor column, so that column is always there (with the shortcut list until a file opens), and the app sizes its own Browser pane.
+- The inline review covers files that are open when the agent edits them. A file the agent changed while it was closed opens with the new text; the chat's own **Review** card still shows that change.
+- The picker reads an element's styles while the pointer is over it, so `:hover` rules show in the reported styles.
 - No language server yet: highlighting, folding, brackets and word completion, but no go-to-definition or diagnostics.
 - Python web UIs (Streamlit, Flask, Django, Gradio) are not detected yet. Open their address in the app's Browser.
 - Against a remote Hermes backend, the dev server runs on the remote machine, so its `localhost` page is not reachable from this one.
@@ -162,7 +261,10 @@ What the plugin does on your machines, so you can decide before installing:
 - Files that are not UTF-8 (Latin-1, UTF-16) open as binary and are not edited.
 - The Explorer has no keyboard tree navigation or multi-select yet.
 - The app's terminal has no plugin action, so the IDE has no Terminal toggle; use the app's own (Ctrl+` with the chat focused).
-- The catalog build cannot size a column the app docks; your resizes last while the window is open. The full build's column sizing and IDE group depend on the app's markup, so a Desktop update can break them; the IDE then falls back to the app's even split and the badges.
+- Catalog build: the Explorer is a panel inside the Editor column, so that column is always there (with the shortcut list until a file opens), and the app sizes its own Browser pane. It cannot size a column the app docks; your resizes last while the window is open.
+- Full build: column sizing and the IDE group depend on the app's markup, so a Desktop update can break them; the IDE then falls back to the app's even split and the badges.
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 ## How it fits together
 
@@ -171,9 +273,15 @@ What the plugin does on your machines, so you can decide before installing:
 | Desktop half | `desktop/plugin.js`, built from `src/` | Main window: the IDE status button and IDE chats menu, the open command, the row badge (full build: the sidebar IDE group). IDE window (a claimed single-session pop-out): Explorer, Editor and project UI as app tiles, layout toggles, Quick Open, commands, keybinds, the element picker. Both: settings page, the `::hermes-ide-open` transcript card |
 | Editor | `src/frame/editor.ts`, mounted into the editor's iframe | CodeMirror 6 with the app's theme tokens and fonts; owns its keyboard |
 | Backend | `dashboard/plugin_api.py`, `dashboard/static_server.py` → `/api/plugins/hermes-ide/` | File system, ripgrep search, Quick Open file list, git status and `HEAD` text, project UI detection and the dev-server manager, on the machine the agent runs on |
-| Agent half | `__init__.py`, `plugin.yaml` | The `ide_open` tool |
+| Agent half | `__init__.py`, `plugin.yaml`, `skills/guide/` | The `ide_open` tool, the [Hermes IDE] turn note and the `hermes-ide:guide` skill |
 
-Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Features, gates and what comes next: [docs/FEATURES.md](docs/FEATURES.md). Changes: [CHANGELOG.md](CHANGELOG.md). Catalog submission: [docs/CATALOG-SUBMISSION.md](docs/CATALOG-SUBMISSION.md).
+| Document | What it covers |
+|---|---|
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Windows, builds, data flow and the decisions behind them |
+| [docs/FEATURES.md](docs/FEATURES.md) | Every feature with its Cursor counterpart, wiring and acceptance test, by gate |
+| [docs/DEVELOPING.md](docs/DEVELOPING.md) | The live loop, the release steps and the sandboxed Desktop used to verify releases |
+| [docs/CATALOG-SUBMISSION.md](docs/CATALOG-SUBMISSION.md) | The catalog entry, the PR text and the install-scan disclosure |
+| [CHANGELOG.md](CHANGELOG.md) | What changed in each release |
 
 ## Develop
 
@@ -181,13 +289,38 @@ Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Features, gates and what 
 cd dev && npm ci
 npm run build          # catalog build → desktop/plugin.js
 npm run build:full     # full build → desktop/plugin.js
-npm test               # helper and layout tests
+npm test               # helper, layout and grammar-table tests
 cd .. && python -m pytest tests -q   # with pytest, fastapi and httpx installed; see docs/DEVELOPING.md
 hermes plugins validate .   # the catalog's admission checks (catalog build)
 ```
 
-[docs/DEVELOPING.md](docs/DEVELOPING.md) covers the live loop, the release steps and the sandboxed Desktop used to verify releases.
+`main` carries the full build. Each release's catalog build is a tagged commit on top of it (`catalog-vX.Y.Z`).
+
+## Roadmap
+
+The next gates, with their acceptance tests, are in [docs/FEATURES.md](docs/FEATURES.md). In short:
+
+- [ ] A changed-files strip above the chat, opening the inline review for every file a turn wrote, with Keep All and Undo All
+- [ ] Source Control actions: stage, unstage, discard and commit
+- [ ] Explorer keyboard navigation, multi-select and drag to move
+- [ ] Open a picked element's source in the editor at the line
+- [ ] Language intelligence: diagnostics, hover, go to definition and format on save
+- [ ] Python web UIs in project detection
+- [ ] SDK hooks upstream (session-list group, split sizing, Browser address) so the catalog build gains the full build's columns
+- [ ] Public listing in the Hermes plugin catalog
+
+## Contributing
+
+Issues and pull requests are welcome. Before opening a pull request, run the JavaScript and Python tests above, build both targets, and run `hermes plugins validate .` on the catalog build. [docs/DEVELOPING.md](docs/DEVELOPING.md) explains how to verify a change in a sandboxed Desktop without touching your own Hermes setup.
+
+## Acknowledgements
+
+- [Hermes Agent](https://github.com/NousResearch/hermes-agent) by Nous Research, its Desktop app and plugin SDK
+- [CodeMirror 6](https://codemirror.net/) and the [Lezer](https://lezer.codemirror.net/) parsers behind the editor
+- [Cursor](https://cursor.com/), the reference for the layout and the review flow
 
 ## License
 
-MIT. Copyright (c) 2026 Coeus Institute.
+MIT. Copyright (c) 2026 Coeus Institute. See [LICENSE](LICENSE).
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>

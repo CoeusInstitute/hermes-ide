@@ -39,7 +39,7 @@ from fastapi import APIRouter, HTTPException
 # blocks the gateway event loop that every Desktop request shares.
 router = APIRouter()
 
-VERSION = "0.6.2"
+VERSION = "0.6.3"
 MAX_READ_BYTES = 5 * 1024 * 1024
 MAX_LIST_ENTRIES = 5000
 MAX_FILES = 50_000
