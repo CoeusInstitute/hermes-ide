@@ -1,4 +1,4 @@
-// Hermes IDE desktop plugin (full build). Built from src/ by dev/build.mjs; do not edit by hand.
+// Hermes IDE desktop plugin (catalog build). Built from src/ by dev/build.mjs; do not edit by hand.
 
 // src/plugin.tsx
 import * as sdk from "@hermes/plugin-sdk";
@@ -98,10 +98,6 @@ function pathsFromToolArgs(args) {
   };
   return visit(args, "", 0), [...out];
 }
-function columnPlan(width) {
-  let explorer = Math.round(Math.min(300, Math.max(220, width * 0.14))), chat = Math.round(Math.min(760, Math.max(380, width * 0.3))), preview = Math.round(Math.min(1280, Math.max(520, width * 0.32)));
-  return { explorer, chat, preview };
-}
 var TILE_IDS = ["explorer", "editor", "browser"], DEFAULT_LAYOUT = { columns: [["explorer"], ["editor"], ["browser"], ["chat"]], widths: {} }, tilePane = (id2) => id2 === "chat" ? "workspace" : `plugin-workspace:hermes-ide-${id2}`;
 function normalizeLayout(layout, open) {
   let want = /* @__PURE__ */ new Set([...open, "chat"]), seen = /* @__PURE__ */ new Set(), cols = (Array.isArray(layout?.columns) ? layout.columns : []).map((col) => (Array.isArray(col) ? col : []).filter((id2) => want.has(id2) && !seen.has(id2) && (seen.add(id2), !0))).filter((col) => col.length);
@@ -121,12 +117,6 @@ function normalizeLayout(layout, open) {
   }
   return cols;
 }
-function columnSet(columns) {
-  return columns.map((col) => [...col].sort().join("+")).sort().join("|");
-}
-function widthsFor(layout, columns) {
-  return columnSet(layout.columns) === columnSet(columns) ? layout.widths : typeof layout.widths.explorer == "number" ? { explorer: layout.widths.explorer } : {};
-}
 function dockPlan(layout, open) {
   let cols = normalizeLayout(layout, open), c2 = cols.findIndex((col) => col.includes("chat")), steps = [], anchor = (k) => k === c2 ? "workspace" : tilePane(cols[k][0]), place = (k, pos) => {
     let [first, ...rest] = cols[k];
@@ -138,23 +128,7 @@ function dockPlan(layout, open) {
   for (let k = c2 + 1; k < cols.length; k++) place(k, "right");
   return steps;
 }
-function columnWidths(columns, width, saved = {}) {
-  let plan = columnPlan(width), shares = Math.max(1, columns.filter((id2) => id2 === "browser" || !id2).length), planned = { explorer: plan.explorer, chat: plan.chat, browser: Math.round(plan.preview / shares), editor: 0 }, flex = columns.includes("editor") ? "editor" : columns.includes("browser") ? "browser" : columns.includes("chat") ? "chat" : null, pagePair = flex === "browser" && columns.includes("chat");
-  if (pagePair) {
-    let rest = width - columns.reduce((sum, id2) => sum + (id2 ? id2 !== "browser" && id2 !== "chat" ? sizeOf(id2) : 0 : planned.browser), 0);
-    planned.chat = Math.round(rest * 0.47);
-  }
-  function sizeOf(id2) {
-    let f = saved[id2], px = typeof f == "number" && f > 0.04 && f < 0.9 ? Math.round(f * width) : null;
-    return px === null || id2 === "explorer" && (px < 180 || px > 600) ? planned[id2] : px;
-  }
-  return columns.map((id2) => id2 && id2 === flex ? null : id2 ? pagePair && id2 === "chat" ? planned.chat : sizeOf(id2) : planned.browser);
-}
 var HAS_SCHEME = /^[a-z][a-z0-9+.-]*:\/\//i, BARE_SCHEME = /^(about|data):/i;
-function addressToUrl(input) {
-  let v = input.trim();
-  return !v || HAS_SCHEME.test(v) || BARE_SCHEME.test(v) ? v : /^(localhost|127\.|0\.0\.0\.0|\[)/i.test(v) || /^[^\s/]+:\d+(\/|$)/.test(v) ? `http://${v}` : `https://${v}`;
-}
 function pathOrUrl(target) {
   return HAS_SCHEME.test(target) || BARE_SCHEME.test(target) ? target : "file:///" + normPath(target).replace(/^\/+/, "").split("/").map(encodeURIComponent).join("/").replace(/^([a-z])%3A/i, "$1:");
 }
@@ -163,110 +137,6 @@ function expandPickTokens(text, blocks) {
   return text.includes("[[ element ") ? text.replace(PICK_TOKEN_RE, (token, id2) => blocks[id2] ? `
 ${blocks[id2]}
 ` : token) : text;
-}
-
-// src/full/layout.ts
-async function dragSeam(edge, target) {
-  let sash = [...document.querySelectorAll('[role="separator"]')].filter((el2) => !el2.closest(".hi-tile")).map((el2) => ({ el: el2, r: el2.getBoundingClientRect() })).filter((s) => s.r.height > 200 && s.r.width > 0 && s.r.width < 24 && Math.abs(s.r.left - edge) < 24).sort((a2, b) => Math.abs(a2.r.left - edge) - Math.abs(b.r.left - edge))[0];
-  if (!sash)
-    return !1;
-  let base2 = { bubbles: !0, cancelable: !0, pointerId: 1, pointerType: "mouse", isPrimary: !0, clientY: Math.round(sash.r.top + sash.r.height / 2) }, down = Math.round(sash.r.left + sash.r.width / 2), to = Math.round(target + down - sash.r.left);
-  return sash.el.dispatchEvent(new PointerEvent("pointerdown", { ...base2, clientX: down, button: 0, buttons: 1 })), window.dispatchEvent(new PointerEvent("pointermove", { ...base2, clientX: to, button: -1, buttons: 1 })), await frames(2), window.dispatchEvent(new PointerEvent("pointerup", { ...base2, clientX: to, button: 0, buttons: 0 })), !0;
-}
-function readColumns() {
-  let zones = [...document.querySelectorAll("[data-tree-group]:not([data-pane-host])")].map((el2) => ({ r: el2.getBoundingClientRect(), id: el2.getAttribute("data-tree-group") || "" })).filter((z2) => z2.r.width > 0 && z2.r.height > 0 && z2.id !== "grp-sessions");
-  if (!zones.length) return [];
-  let top2 = Math.min(...zones.map((z2) => z2.r.top)), cols = [];
-  for (let z2 of zones.filter((z3) => z3.r.top <= top2 + 4).sort((a2, b) => a2.r.left - b.r.left))
-    cols.some((c2) => Math.abs(c2.left - z2.r.left) < 4) || cols.push({ ids: [], left: z2.r.left, width: z2.r.width });
-  let colAt = (el2) => {
-    let r = el2?.getBoundingClientRect();
-    if (!r || r.width <= 0) return;
-    let x = r.left + r.width / 2;
-    return cols.find((c2) => x >= c2.left && x <= c2.left + c2.width);
-  }, composer = [...document.querySelectorAll('[contenteditable="true"]')].find(
-    (el2) => !el2.closest('.hi-tile, [role="dialog"]') && el2.getBoundingClientRect().width > 0
-  );
-  colAt(composer)?.ids.push("chat");
-  for (let id2 of TILE_IDS) colAt([...document.querySelectorAll(`.hi-tile[data-tile="${id2}"]`)].find((el2) => el2.getBoundingClientRect().width > 0))?.ids.push(id2);
-  return cols;
-}
-function captureLayout() {
-  let cols = readColumns().filter((c2) => c2.ids.length);
-  if (!cols.length || !cols.some((c2) => c2.ids.includes("chat"))) return null;
-  let prev = savedLayout(), placed = new Set(cols.flatMap((c2) => c2.ids));
-  for (let id2 of $openTiles.get()) {
-    if (placed.has(id2)) continue;
-    let mates = prev.columns.find((col) => col.includes(id2)) || [], home = cols.find((c2) => c2.ids.some((x) => mates.includes(x)));
-    home && home.ids.push(id2);
-  }
-  let W = window.innerWidth, widths = { ...prev.widths };
-  for (let c2 of cols) for (let id2 of c2.ids) widths[id2] = Math.round(c2.width / W * 1e3) / 1e3;
-  return { columns: cols.map((c2) => c2.ids), widths };
-}
-var lastSaved = "", fittedOnce = !1;
-function fullSaveLayout() {
-  if (!IDE_WINDOW || !layoutState.ready || layoutState.fitting || !fittedOnce) return;
-  let layout = captureLayout();
-  if (!layout) return;
-  let prev = savedLayout();
-  if (JSON.stringify(layout.columns) !== JSON.stringify(prev.columns)) {
-    writePerChat("layout", { columns: layout.columns, widths: widthsFor(prev, layout.columns) }), lastSaved = "", fitColumns().then(fullSaveLayout);
-    return;
-  }
-  let json2 = JSON.stringify(layout);
-  json2 !== lastSaved && (lastSaved = json2, writePerChat("layout", layout));
-}
-var refitWhenShown = !1;
-async function fitColumns() {
-  if (!layoutState.fitting) {
-    if (document.visibilityState !== "visible") {
-      refitWhenShown = !0;
-      return;
-    }
-    layoutState.fitting = !0;
-    try {
-      await frames(3), fittedOnce = !0;
-      let W = window.innerWidth, now = captureLayout(), saved = now ? widthsFor(savedLayout(), now.columns) : savedLayout().widths, measure = () => readColumns(), cols = measure(), ids = cols.map((c2) => c2.ids.includes("editor") ? "editor" : c2.ids.includes("chat") ? "chat" : c2.ids[0] ?? null), widths = columnWidths(ids, W, saved), flex = widths.indexOf(null);
-      if (flex < 0) return;
-      for (let k = 0; k < flex; k++) {
-        let edge = cols[k].left + cols[k].width, target = cols[k].left + widths[k];
-        Math.abs(edge - target) > 6 && await dragSeam(edge, target) && (await frames(3), cols = measure());
-      }
-      for (let k = cols.length - 1; k > flex; k--) {
-        let edge = cols[k].left, target = cols[k].left + cols[k].width - widths[k];
-        Math.abs(edge - target) > 6 && await dragSeam(edge, target) && (await frames(3), cols = measure());
-      }
-    } finally {
-      layoutState.fitting = !1;
-    }
-  }
-}
-function watchLayout() {
-  let timer = 0, zones = -1, obs = new MutationObserver(() => {
-    let n = document.querySelectorAll("[data-tree-group]").length;
-    n !== zones && (zones = n, clearTimeout(timer), timer = window.setTimeout(() => {
-      layoutState.ready && fitColumns().then(fullSaveLayout);
-    }, 400));
-  });
-  obs.observe(document.body, { childList: !0, subtree: !0 });
-  let save = () => window.setTimeout(fullSaveLayout, 300);
-  window.addEventListener("pointerup", save, !0);
-  let shown = () => {
-    refitWhenShown && document.visibilityState === "visible" && (refitWhenShown = !1, fitColumns().then(fullSaveLayout));
-  };
-  document.addEventListener("visibilitychange", shown), window.addEventListener("focus", shown);
-  let tick = window.setInterval(fullSaveLayout, 3e3);
-  ctx.onDispose(() => {
-    clearTimeout(timer), clearInterval(tick), window.removeEventListener("pointerup", save, !0), document.removeEventListener("visibilitychange", shown), window.removeEventListener("focus", shown), obs.disconnect();
-  });
-}
-function styleIdeWindow() {
-  let el2 = document.createElement("style");
-  el2.id = "hermes-ide-window", el2.textContent = '[data-sash-overlap] > span:first-child{opacity:1 !important;transform:none !important;translate:none !important;background:color-mix(in srgb,var(--ui-base) 18%,transparent) !important}[data-tree-group="grp-main"]{background:var(--ui-bg-chrome)}', document.head.append(el2), ctx.onDispose(() => el2.remove());
-}
-function fullWindowSetup() {
-  styleIdeWindow(), window.__hermesIde = { fitColumns, readColumns, savedLayout, captureLayout, browserNav: $browserNav };
 }
 
 // src/core.ts
@@ -386,7 +256,7 @@ function onFrameMessage(f, m) {
         break;
     }
 }
-var TILE_TITLE = { explorer: "Explorer", editor: "Editor", browser: "Browser" }, TILE_MIN = { explorer: "13rem", editor: "24rem", browser: "22rem" }, closers = /* @__PURE__ */ new Map(), disposing = !1, $openTiles = atom([]), $explorerPanel = atom(!0), inEditor = (id2) => !1, inRunView = (id2) => !1, perChat = (key) => `${key}:${windowSessionId() ?? "draft"}`;
+var TILE_TITLE = { explorer: "Explorer", editor: "Editor", browser: "Project UI" }, TILE_MIN = { explorer: "13rem", editor: "24rem", browser: "22rem" }, closers = /* @__PURE__ */ new Map(), disposing = !1, $openTiles = atom([]), $explorerPanel = atom(!0), inEditor = (id2) => id2 === "explorer", inRunView = (id2) => id2 === "browser", perChat = (key) => `${key}:${windowSessionId() ?? "draft"}`;
 function readPerChat(key) {
   return ctx.storage.get(perChat(key), null) ?? ctx.storage.get(key, null);
 }
@@ -761,7 +631,7 @@ async function inlineEdit(path, from3, to, instruction2) {
 var $browserNav = atom(null), $runUiRequest = atom(0), $pagePending = atom(null);
 function openInBrowser(target) {
   let url = pathOrUrl(target);
-  $browserNav.set({ url, at: Date.now() }), openTile("browser");
+  $pagePending.set(url), openTile("browser");
 }
 function revealSidebar(view) {
   view && $view.set(view), openTile("explorer"), view === "search" && $searchFocus.set($searchFocus.get() + 1);
@@ -876,11 +746,10 @@ function savedLayout() {
 }
 var layoutState = { ready: !1, fitting: !1 };
 function saveLayout() {
-  fullSaveLayout();
 }
 async function restoreLayout() {
   let tiles = savedTiles();
-  $tabs.get().length || (tiles = tiles.filter((id2) => id2 !== "editor"));
+  $explorerPanel.set(tiles.includes("explorer")), tiles = (tiles.includes("explorer") || tiles.includes("browser")) && !tiles.includes("editor") ? [...tiles, "editor"] : tiles, tiles.includes("browser") && $explorerPanel.set(!0), tiles.includes("browser") && $view.set("run"), tiles = tiles.filter((id2) => id2 !== "explorer" && id2 !== "browser");
   for (let step of dockPlan(savedLayout(), tiles))
     openTile(step.id, step.dock), await frames(2);
 }
@@ -919,9 +788,9 @@ function maximizeOnce() {
   !sessionStorage.getItem("hermes-ide:sized") && window.outerWidth < screen.availWidth * 0.85 && (sessionStorage.setItem("hermes-ide:sized", "1"), window.hermesDesktop?.windowControls?.toggleMaximize?.());
 }
 async function setupIdeWindow() {
-  markIdeChat(windowSessionId()), maximizeOnce(), fullWindowSetup(), await maximized(), await sizeSettled(), await hideSessionList(), await restoreLayout();
+  markIdeChat(windowSessionId()), maximizeOnce(), await maximized(), await sizeSettled(), await hideSessionList(), await restoreLayout();
   let want = $active.get() ?? $tabs.get()[0]?.path;
-  want && !meta.has(pathKey(want)) && closers.has("editor") && activate(want), await frames(2), await fitColumns(), layoutState.ready = !0, saveLayout();
+  want && !meta.has(pathKey(want)) && closers.has("editor") && activate(want), layoutState.ready = !0;
 }
 function runCommand(id2) {
   let active = $active.get();
@@ -1029,7 +898,12 @@ async function detectProject(force = !1) {
   }
 }
 function showFound(c2) {
-  openTile("browser");
+  $view.get() !== "run" && ($runAttention.set(!0), c2 && host2.notify({
+    kind: "info",
+    title: "Hermes IDE",
+    message: `Found ${c2.kind === "static" ? "a static site" : `a ${c2.framework} app`}${c2.rel ? ` in ${c2.rel}` : ""}.`,
+    action: { label: "Show", onClick: () => openTile("browser") }
+  }));
 }
 async function startUi(install = !1) {
   let c2 = selected(), root = $root.get();
@@ -1078,7 +952,7 @@ async function handleOpenRequest(p) {
     let line = Number(p.line) > 0 ? Number(p.line) : void 0, shown = await openFile(p.path, { line });
     ackRequest(p.req, shown ? "opened" : "error", shown ? `Showing ${p.path}${line ? ` at line ${line}` : ""} in the IDE's editor.` : `The IDE could not open ${p.path}; it showed the user why.`);
   }
-  p.url && (openInBrowser(p.url), ackRequest(p.req, "opened", `Showing ${p.url} in the IDE's Browser column.`, p.url)), p.ui && await runUiForAgent(p.req), !p.path && !p.url && !p.ui && ackRequest(p.req, "opened", "The chat's IDE window is open.");
+  p.url && (openInBrowser(p.url), ackRequest(p.req, "opened", `Offered ${p.url} in the IDE's Run view; to show it in the app's Browser, call desktop_preview with action open and this url.`, p.url)), p.ui && await runUiForAgent(p.req), !p.path && !p.url && !p.ui && ackRequest(p.req, "opened", "The chat's IDE window is open.");
 }
 async function runUiForAgent(req) {
   let say = (status, detail, url = "") => ackRequest(req, status, detail, url);
@@ -1090,12 +964,12 @@ async function runUiForAgent(req) {
   if (!c2)
     return say("no_ui", `No web UI was found in ${root}: no package.json dev script that runs a known framework's dev server (Vite, Next.js, Nuxt, Remix, SvelteKit, Astro, Angular, CRA and similar, at the root, one level down, or in apps/* or packages/*) and no index.html. Python web UIs are not detected.`);
   let what = `${c2.kind === "static" ? "static site" : `${c2.framework} app`}${c2.rel ? ` in ${c2.rel}` : ""}`;
-  openTile("browser"), trusted().includes(trustKey(c2)) ? live($server.get()) || await startUi() : ($askTrust.set(c2), say("needs_trust", `Found a ${what} (${c2.command}${c2.run ? `: ${c2.run}` : ""}). It runs the project's own code, so the IDE is asking the user to allow it (Always run for this project, or Run once) in its Browser column; it starts when they do.`));
+  openTile("browser"), trusted().includes(trustKey(c2)) ? live($server.get()) || await startUi() : ($askTrust.set(c2), say("needs_trust", `Found a ${what} (${c2.command}${c2.run ? `: ${c2.run}` : ""}). It runs the project's own code, so the IDE is asking the user to allow it (Always run for this project, or Run once) in its Run view; it starts when they do.`));
   for (let until = Date.now() + 5e4; Date.now() < until; await sleep(1e3)) {
     let s2 = $server.get();
     if (s2?.id === c2.id) {
       if (s2.state === "ready" && s2.url)
-        return say("running", `The ${what} is running at ${s2.url} and showing in the IDE's Browser column.`, s2.url);
+        return say("running", `The ${what} is running at ${s2.url}. It is offered in the IDE's Run view; to show it in the app's Browser, call desktop_preview with action open and this url.`, s2.url);
       if (s2.state === "exited")
         return say("error", `The ${what}'s dev server exited${s2.exit_code != null ? ` with code ${s2.exit_code}` : ""}. Last output:
 ${s2.log.slice(-8).join(`
@@ -1255,9 +1129,7 @@ async function pickElement(webview) {
     return;
   }
   let run = null;
-  if (webview)
-    run = (code) => (webview.focus(), webview.executeJavaScript(code, !0));
-  else if (ctx.preview?.executeJavaScript) {
+  if (ctx.preview?.executeJavaScript) {
     if (!ctx.preview.isAvailable?.()) {
       notify("info", "Open the page in the Browser pane first (the link in the Project UI column), then pick.", "Hermes IDE");
       return;
@@ -1280,6 +1152,17 @@ async function pickElement(webview) {
     notify("error", `Could not pick from this page: ${e.message}`, "Hermes IDE");
   } finally {
     cancelPick = null, $picking.set(!1);
+  }
+}
+async function reloadPreview() {
+  if (!ctx.preview?.isAvailable?.()) {
+    notify("info", "No page is open in the Browser pane.", "Hermes IDE");
+    return;
+  }
+  try {
+    await ctx.preview.executeJavaScript("location.reload(); true");
+  } catch (e) {
+    notify("error", `Could not reload the page: ${e.message}`, "Hermes IDE");
   }
 }
 async function likelySources(p) {
@@ -1332,7 +1215,7 @@ function expandPicks(text) {
   return text.includes("[[ element ") ? expandPickTokens(text, storedPicks().blocks) : text;
 }
 function pickBlock(p, sources) {
-  let where = "the IDE browser", styles = Object.entries(p.styles).map(([k, v]) => `${k}: ${v}`).join("; "), attrs = Object.entries(p.attrs || {}).map(([k, v]) => `${k}="${v.replace(/"/g, "'")}"`).join(" "), c2 = p.component;
+  let where = "the app's Browser", styles = Object.entries(p.styles).map(([k, v]) => `${k}: ${v}`).join("; "), attrs = Object.entries(p.attrs || {}).map(([k, v]) => `${k}="${v.replace(/"/g, "'")}"`).join(" "), c2 = p.component;
   return [
     `[[ Element picked in ${where} (${p.url}):`,
     `- selector: \`${p.selector}\` (<${p.tag}> ${p.rect.w}\xD7${p.rect.h})${p.text ? `, text "${p.text.replace(/"/g, "'")}"` : ""}`,
@@ -1405,109 +1288,6 @@ function initIdeChats() {
   });
   refreshRows(), ctx.onDispose(() => {
     window.removeEventListener("storage", onStorage), window.removeEventListener("focus", onFocus), clearInterval(tick), offTurn?.();
-  });
-}
-
-// src/full/sidebar.ts
-var CSS2 = `
-.hi-sb{margin:2px 0 4px}
-.hi-sb-head{display:flex;align-items:center;gap:8px;padding:8px 8px 2px;user-select:none}
-.hi-sb-head button.hi-sb-label{display:flex;flex:1;min-width:0;align-items:center;gap:8px;border:0;padding:0;background:none;cursor:pointer;color:var(--ui-text-quaternary);font:inherit}
-.hi-sb-name{flex:none;font-size:.64rem;font-weight:600;letter-spacing:.12em;text-transform:uppercase}
-.hi-sb-count{flex:none;font-size:.6rem;color:var(--ui-text-quaternary)}
-.hi-sb-rule{height:1px;min-width:16px;flex:1;background:var(--ui-stroke-tertiary)}
-.hi-sb-add{display:grid;place-items:center;width:18px;height:18px;border:0;border-radius:4px;background:none;color:var(--ui-text-tertiary);cursor:pointer;opacity:0;transition:opacity .12s}
-.hi-sb:hover .hi-sb-add,.hi-sb-add:focus-visible{opacity:1}
-.hi-sb-add:hover{background:var(--ui-control-hover-background);color:var(--ui-text-primary)}
-.hi-sb-row{position:relative;display:flex;align-items:center;gap:8px;min-height:44px;padding:4px 8px;border-radius:6px;cursor:pointer;color:var(--ui-text-secondary)}
-.hi-sb-row:hover{background:var(--ui-row-hover-background);color:var(--ui-text-primary)}
-.hi-sb-row:focus-visible{outline:2px solid var(--ui-accent);outline-offset:-2px}
-.hi-sb-lead{display:grid;place-items:center;width:16px;flex:none;color:var(--ui-accent)}
-.hi-sb-main{display:flex;flex-direction:column;min-width:0;flex:1}
-.hi-sb-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.8125rem}
-.hi-sb-meta{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:2px;font-size:.625rem;color:var(--ui-text-tertiary)}
-.hi-sb-age{flex:none;font-size:.625rem;color:var(--ui-text-tertiary)}
-.hi-sb-x{display:none;place-items:center;width:20px;height:20px;border:0;border-radius:4px;background:none;color:var(--ui-text-tertiary);cursor:pointer;flex:none}
-.hi-sb-row:hover .hi-sb-x,.hi-sb-row:focus-within .hi-sb-x{display:grid}
-.hi-sb-row:hover .hi-sb-age{display:none}
-.hi-sb-x:hover{background:var(--ui-control-hover-background);color:var(--ui-text-primary)}
-.hi-sb-empty{padding:4px 10px 8px 32px;font-size:.6875rem;color:var(--ui-text-tertiary)}
-.hi-ide-hidden{display:none !important}
-`, group = null, collapsed = !1, disposed = !1;
-function el(tag, cls, text) {
-  let n = document.createElement(tag);
-  return n.className = cls, text !== void 0 && (n.textContent = text), n;
-}
-var codicon = (name2) => el("span", `codicon codicon-${name2}`), pinnedKey = "", pinnedNow = () => new Set([...document.querySelectorAll("[data-session-pin-drop] .hi-ide-badge[data-ide-sid]")].map((b) => b.dataset.ideSid));
-function render() {
-  if (!group) return;
-  let pinned = pinnedNow(), list2 = ideRows().filter((r) => !pinned.has(durable(r)));
-  group.replaceChildren();
-  let head = el("div", "hi-sb-head"), label = el("button", "hi-sb-label");
-  label.type = "button", label.title = collapsed ? "Show IDE chats" : "Hide IDE chats", label.setAttribute("aria-expanded", String(!collapsed)), label.append(el("span", "hi-sb-name", "IDE"), el("span", "hi-sb-count", list2.length ? String(list2.length) : ""), el("span", "hi-sb-rule")), label.onclick = () => {
-    collapsed = !collapsed, ctx.storage.set("sidebarCollapsed", collapsed), render();
-  };
-  let add2 = el("button", "hi-sb-add");
-  if (add2.type = "button", add2.title = "New IDE workspace: a new chat in its own IDE window, in a folder you choose", add2.append(codicon("add")), add2.onclick = (e) => {
-    e.stopPropagation(), newIdeWorkspace();
-  }, head.append(label, add2), group.append(head), !collapsed) {
-    if (!list2.length) {
-      group.append(el("div", "hi-sb-empty", "Chats you open in the IDE are listed here."));
-      return;
-    }
-    for (let r of list2) {
-      let row = el("div", "hi-sb-row");
-      row.tabIndex = 0, row.setAttribute("role", "button"), row.title = "Open in the Hermes IDE window", row.dataset.sid = durable(r);
-      let lead = el("span", "hi-sb-lead");
-      lead.append(codicon("code"));
-      let main = el("span", "hi-sb-main"), meta3 = [r.model?.split("/").pop(), r.message_count ? `${r.message_count} messages` : ""].filter(Boolean).join(" \xB7 ");
-      main.append(el("span", "hi-sb-title", r.title || r.preview || "Untitled chat"), el("span", "hi-sb-meta", meta3));
-      let x = el("button", "hi-sb-x");
-      x.type = "button", x.title = "Remove from IDE chats (it goes back to the session list)", x.append(codicon("close")), x.onclick = (e) => {
-        e.stopPropagation(), unmarkIdeChat(Object.keys($ideChats.get()).filter((id2) => matches(r, id2)));
-      }, row.append(lead, main, el("span", "hi-sb-age", age(r.last_active || r.started_at)), x);
-      let open = () => void openIdeWindow({ sid: durable(r) });
-      row.onclick = open, row.onkeydown = (e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), open()), group.append(row);
-    }
-  }
-}
-function sync() {
-  if (disposed || !group) return;
-  let list2 = document.querySelector("[data-sessions-mode]"), recents = list2?.getAttribute("data-sessions-mode") === "flat" ? list2.querySelector(":scope > [data-session-pin-drop] ~ [data-session-unpin-drop]") : null, header = recents?.firstElementChild, open = !!recents && [...recents.children].some((c2) => c2 !== header && c2 !== group);
-  recents && header && header !== group && open ? (group.parentElement !== recents || header.nextElementSibling !== group) && header.after(group) : group.isConnected && group.remove();
-  let mounted = !!recents && group.isConnected, listed = new Set([...group.querySelectorAll(".hi-sb-row[data-sid]")].map((r) => r.dataset.sid));
-  for (let badge of document.querySelectorAll(".hi-ide-badge[data-ide-sid]")) {
-    if (!mounted || !recents.contains(badge) || !listed.has(badge.dataset.ideSid)) continue;
-    (badge.closest("[data-index]") ?? climbTo(badge, recents))?.classList.add("hi-ide-hidden");
-  }
-  for (let hidden of document.querySelectorAll(".hi-ide-hidden")) {
-    let sid = hidden.querySelector(".hi-ide-badge")?.dataset.ideSid;
-    (!mounted || !sid || !listed.has(sid)) && hidden.classList.remove("hi-ide-hidden");
-  }
-  let key = [...pinnedNow()].sort().join();
-  key !== pinnedKey && (pinnedKey = key, render());
-}
-function climbTo(node, recents) {
-  let n = node;
-  for (; n && n.parentElement && n.parentElement.parentElement !== recents; ) n = n.parentElement;
-  return n && n.parentElement && n.parentElement !== group ? n : null;
-}
-function initSidebar() {
-  let style = document.createElement("style");
-  style.textContent = CSS2, document.head.append(style), collapsed = !!ctx.storage.get("sidebarCollapsed", !1), group = document.createElement("div"), group.className = "hi-sb", group.setAttribute("data-hermes-ide-group", ""), render();
-  let queued = !1, obs = new MutationObserver(() => {
-    queued || (queued = !0, requestAnimationFrame(() => {
-      queued = !1, sync();
-    }));
-  });
-  obs.observe(document.body, { childList: !0, subtree: !0, attributes: !0, attributeFilter: ["data-sessions-mode"] });
-  let offRows = $sessionRows.subscribe(() => render()), offChats = $ideChats.subscribe(() => {
-    render(), sync();
-  });
-  ctx.onDispose(() => {
-    disposed = !0, obs.disconnect(), offRows(), offChats(), group?.remove();
-    for (let hidden of document.querySelectorAll(".hi-ide-hidden")) hidden.classList.remove("hi-ide-hidden");
-    style.remove();
   });
 }
 
@@ -4270,25 +4050,25 @@ var COUNT = typeof Symbol > "u" ? "__\u037C" : Symbol.for("\u037C"), SET = typeo
     function splitSelector(selector) {
       return /^@/.test(selector) ? [selector] : selector.split(/,\s*/);
     }
-    function render2(selectors, spec2, target, isKeyframes) {
+    function render(selectors, spec2, target, isKeyframes) {
       let local = [], isAt = /^@(\w+)\b/.exec(selectors[0]), keyframes = isAt && isAt[1] == "keyframes";
       if (isAt && spec2 == null) return target.push(selectors[0] + ";");
       for (let prop in spec2) {
         let value = spec2[prop];
         if (/&/.test(prop))
-          render2(
+          render(
             prop.split(/,\s*/).map((part) => selectors.map((sel) => part.replace(/&/, sel))).reduce((a2, b) => a2.concat(b)),
             value,
             target
           );
         else if (value && typeof value == "object") {
           if (!isAt) throw new RangeError("The value of a property (" + prop + ") should be a primitive value.");
-          render2(splitSelector(prop), value, local, keyframes);
+          render(splitSelector(prop), value, local, keyframes);
         } else value != null && local.push(prop.replace(/_.*/, "").replace(/[A-Z]/g, (l) => "-" + l.toLowerCase()) + ": " + value + ";");
       }
       (local.length || keyframes) && target.push((finish && !isAt && !isKeyframes ? selectors.map(finish) : selectors).join(", ") + " {" + local.join(" ") + "}");
     }
-    for (let prop in spec) render2(splitSelector(prop), spec[prop], this.rules);
+    for (let prop in spec) render(splitSelector(prop), spec[prop], this.rules);
   }
   // :: () → string
   // Returns a string containing the module's CSS rules.
@@ -11881,8 +11661,8 @@ var MountedTree = class {
     if (typeof name2 == "string") {
       if (this.name == name2)
         return !0;
-      let group2 = this.prop(NodeProp.group);
-      return group2 ? group2.indexOf(name2) > -1 : !1;
+      let group = this.prop(NodeProp.group);
+      return group ? group.indexOf(name2) > -1 : !1;
     }
     return this.id == name2;
   }
@@ -18494,8 +18274,8 @@ var ExternalTokenizer = class {
     this.token = token, this.contextual = !!options.contextual, this.fallback = !!options.fallback, this.extend = !!options.extend;
   }
 };
-function readToken2(data2, input, stack, group2, precTable, precOffset) {
-  let state = 0, groupMask = 1 << group2, { dialect: dialect2 } = stack.p.parser;
+function readToken2(data2, input, stack, group, precTable, precOffset) {
+  let state = 0, groupMask = 1 << group, { dialect: dialect2 } = stack.p.parser;
   scan: for (; (groupMask & data2[state]) != 0; ) {
     let accEnd = data2[state + 1];
     for (let i = state + 3; i < accEnd; i += 2)
@@ -22825,11 +22605,11 @@ var MarkdownParser = class _MarkdownParser extends Parser {
         if (nodeTypes2.some((t2) => t2.name == name2))
           continue;
         composite && (skipContextMarkup[nodeTypes2.length] = (bl, cx, line) => composite(cx, line, bl.value));
-        let id2 = nodeTypes2.length, group2 = composite ? ["Block", "BlockContext"] : block ? id2 >= Type.ATXHeading1 && id2 <= Type.SetextHeading2 ? ["Block", "LeafBlock", "Heading"] : ["Block", "LeafBlock"] : void 0;
+        let id2 = nodeTypes2.length, group = composite ? ["Block", "BlockContext"] : block ? id2 >= Type.ATXHeading1 && id2 <= Type.SetextHeading2 ? ["Block", "LeafBlock", "Heading"] : ["Block", "LeafBlock"] : void 0;
         nodeTypes2.push(NodeType.define({
           id: id2,
           name: name2,
-          props: group2 && [[NodeProp.group, group2]]
+          props: group && [[NodeProp.group, group]]
         })), style && (styles || (styles = {}), Array.isArray(style) || style instanceof Tag ? styles[name2] = style : Object.assign(styles, style));
       }
       nodeSet2 = new NodeSet(nodeTypes2), styles && (nodeSet2 = nodeSet2.extend(styleTags(styles)));
@@ -30407,97 +30187,9 @@ function mountEditor(win, send) {
 import { Button, useValue } from "@hermes/plugin-sdk";
 import { createElement, useEffect, useRef, useState } from "react";
 import { Fragment, jsx as jsx2, jsxs } from "react/jsx-runtime";
-function Webview({ nav: nav2, onNav, onRef }) {
-  let ref = useRef(null), ready = useRef(!1), pending = useRef(null), [initial] = useState(nav2.url), [fail, setFail] = useState(null);
-  return useEffect(() => {
-    let el2 = ref.current;
-    if (!el2) return;
-    let domReady = () => {
-      ready.current = !0, onRef(el2);
-      let u2 = pending.current;
-      pending.current = null, u2 && el2.loadURL(u2).catch(() => {
-      });
-    }, navigated = (e) => {
-      e.isMainFrame !== !1 && (setFail(null), onNav(e.url));
-    }, failed = (e) => {
-      e.isMainFrame && e.errorCode !== -3 && setFail(`${e.errorDescription || "Load failed"} (${e.validatedURL})`);
-    };
-    el2.addEventListener("dom-ready", domReady), el2.addEventListener("did-navigate", navigated), el2.addEventListener("did-navigate-in-page", navigated), el2.addEventListener("did-fail-load", failed);
-    try {
-      el2.getURL(), domReady();
-    } catch {
-    }
-    return () => {
-      el2.removeEventListener("dom-ready", domReady), el2.removeEventListener("did-navigate", navigated), el2.removeEventListener("did-navigate-in-page", navigated), el2.removeEventListener("did-fail-load", failed), ready.current = !1, onRef(null);
-    };
-  }, []), useEffect(() => {
-    nav2.url === initial && !ready.current || (ready.current ? ref.current?.loadURL(nav2.url).catch(() => {
-    }) : pending.current = nav2.url);
-  }, [nav2.at]), /* @__PURE__ */ jsxs(Fragment, { children: [
-    createElement("webview", { ref, src: initial, partition: "persist:hermes-ide", webpreferences: "contextIsolation=yes" }),
-    fail ? /* @__PURE__ */ jsx2("div", { className: "hi-bempty", children: /* @__PURE__ */ jsxs("div", { children: [
-      fail,
-      /* @__PURE__ */ jsx2("div", { style: { marginTop: 10 }, children: /* @__PURE__ */ jsx2(Button, { size: "sm", variant: "secondary", onClick: () => {
-        setFail(null), ready.current && ref.current?.reload();
-      }, children: "Retry" }) })
-    ] }) }) : null
-  ] });
-}
-function FullBrowserTile() {
-  let nav2 = useValue($browserNav), ask = useValue($askTrust), picking = useValue($picking), root = useValue($root), [url, setUrl] = useState(nav2?.url ?? ""), [input, setInput] = useState(nav2?.url ?? ""), [showLog, setShowLog] = useState(!1), view = useRef(null), guest = () => view.current, isWebview = !!window.hermesDesktop;
-  useEffect(() => {
-    nav2 && (setInput(nav2.url), url || setUrl(nav2.url));
-  }, [nav2?.at]);
-  let go2 = (raw) => {
-    let target = addressToUrl(raw);
-    target && $browserNav.set({ url: target, at: Date.now() });
-  };
-  return /* @__PURE__ */ jsxs("div", { className: "hi-tile", "data-tile": "browser", children: [
-    /* @__PURE__ */ jsx2(Styles, {}),
-    /* @__PURE__ */ jsxs("div", { className: "hi-bbar", children: [
-      /* @__PURE__ */ jsx2("button", { className: "hi-btn", title: "Back", disabled: !url, onClick: () => guest()?.goBack(), children: icon("arrow-left") }),
-      /* @__PURE__ */ jsx2("button", { className: "hi-btn", title: "Forward", disabled: !url, onClick: () => guest()?.goForward(), children: icon("arrow-right") }),
-      /* @__PURE__ */ jsx2("button", { className: "hi-btn", title: "Reload", disabled: !url, onClick: () => guest()?.reload(), children: icon("refresh") }),
-      /* @__PURE__ */ jsx2(
-        "input",
-        {
-          className: "hi-url",
-          value: input,
-          placeholder: "Type an address, e.g. localhost:3000",
-          spellCheck: !1,
-          onChange: (e) => setInput(e.target.value),
-          onKeyDown: (e) => {
-            e.key === "Enter" && go2(input), e.stopPropagation();
-          }
-        }
-      ),
-      /* @__PURE__ */ jsx2("button", { className: "hi-btn", "data-on": picking, "aria-pressed": picking, title: picking ? "Cancel the pick" : "Pick an element and send it to the chat", disabled: !url && !picking, onClick: () => void pickElement(guest()), children: icon("inspect") }),
-      /* @__PURE__ */ jsx2("button", { className: "hi-btn", title: "Page DevTools", disabled: !url, onClick: () => guest()?.openDevTools(), children: icon("debug-console") }),
-      /* @__PURE__ */ jsx2("button", { className: "hi-btn", title: "Open in your browser", disabled: !url, onClick: () => void ctx.os.openExternal?.(url), children: icon("link-external") })
-    ] }),
-    /* @__PURE__ */ jsx2(ProjectBar, { showLog, onToggleLog: () => setShowLog(!showLog) }),
-    ask ? /* @__PURE__ */ jsx2(TrustBanner, { cand: ask }) : null,
-    /* @__PURE__ */ jsx2(StaleBanner, {}),
-    showLog ? /* @__PURE__ */ jsx2(ServerLog, {}) : null,
-    /* @__PURE__ */ jsx2("div", { className: "hi-web", children: isWebview ? url ? /* @__PURE__ */ jsx2(Webview, { nav: nav2 && nav2.url ? nav2 : { url, at: 0 }, onRef: (el2) => view.current = el2, onNav: (u2) => {
-      setInput(u2), setUrl(u2);
-    } }, root ?? "") : /* @__PURE__ */ jsx2(ProjectEmpty, { fallback: "No page yet. Type an address above." }) : /* @__PURE__ */ jsx2("div", { className: "hi-bempty", children: "The Browser column needs the Hermes Desktop app." }) })
-  ] });
-}
 
 // src/full/row-click.ts
 import { useLayoutEffect } from "react";
-function useIdeRowClick(ref, isIde, sessionId) {
-  useLayoutEffect(() => {
-    let body = ref.current?.parentElement ?? null;
-    for (; body && !body.querySelector("button:not([data-row-actions] button)"); ) body = body.parentElement;
-    if (!body || !isIde) return;
-    let onClick = (e) => {
-      e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.target.closest("[data-row-actions], [data-reorder-handle]") || (e.preventDefault(), e.stopPropagation(), openIdeWindow({ sid: sessionId }));
-    };
-    return body.addEventListener("click", onClick, !0), () => body.removeEventListener("click", onClick, !0);
-  }, [isIde, sessionId]);
-}
 
 // src/ui.tsx
 import { Fragment as Fragment3, jsx as jsx3, jsxs as jsxs2 } from "react/jsx-runtime";
@@ -30631,15 +30323,22 @@ function Sidebar() {
       /* @__PURE__ */ jsx3(ViewTab, { current: view, id: "explorer", icon: "files", label: "Explorer" }),
       /* @__PURE__ */ jsx3(ViewTab, { current: view, id: "search", icon: "search", label: "Search" }),
       /* @__PURE__ */ jsx3(ViewTab, { current: view, id: "scm", icon: "source-control", label: `Source Control${changes ? ` (${changes})` : ""}`, badge: changes }),
-      null,
+      /* @__PURE__ */ jsx3(RunViewTab, { current: view }),
       /* @__PURE__ */ jsx3("span", { style: { flex: 1 } }),
       /* @__PURE__ */ jsx3("button", { className: "hi-btn", onClick: () => $quickOpen.set(!0), title: "Quick Open (Ctrl+P in the editor)", children: icon("go-to-file") }),
       /* @__PURE__ */ jsx3("button", { className: "hi-btn", onClick: () => $folderDialog.set(!0), title: "Open Folder\u2026", children: icon("folder-opened") })
     ] }),
-    backend === "missing" ? /* @__PURE__ */ jsx3(BackendMissing, {}) : root ? view === "explorer" ? /* @__PURE__ */ jsx3(Explorer, { root }) : view === "search" ? /* @__PURE__ */ jsx3(SearchView, { root }) : /* @__PURE__ */ jsx3(ScmView, { root }) : /* @__PURE__ */ jsxs2("div", { className: "hi-empty", children: [
+    backend === "missing" ? /* @__PURE__ */ jsx3(BackendMissing, {}) : root ? view === "explorer" ? /* @__PURE__ */ jsx3(Explorer, { root }) : view === "search" ? /* @__PURE__ */ jsx3(SearchView, { root }) : view === "run" ? /* @__PURE__ */ jsx3(RunPanel, {}) : /* @__PURE__ */ jsx3(ScmView, { root }) : /* @__PURE__ */ jsxs2("div", { className: "hi-empty", children: [
       "No folder is open. Pick one, or start a chat in a project folder and the IDE follows it.",
       /* @__PURE__ */ jsx3("div", { style: { marginTop: 10 }, children: /* @__PURE__ */ jsx3(Button2, { size: "sm", variant: "secondary", onClick: () => $folderDialog.set(!0), children: "Open Folder\u2026" }) })
     ] })
+  ] });
+}
+function RunViewTab({ current }) {
+  let attention = useValue2($runAttention), server = useValue2($server), live2 = server && server.state !== "exited";
+  return /* @__PURE__ */ jsxs2("button", { className: "hi-btn", "data-on": current === "run", onClick: () => openTile("browser"), title: "Project UI", "aria-label": "Project UI", style: { position: "relative" }, children: [
+    icon("play-circle", 15),
+    attention || live2 ? /* @__PURE__ */ jsx3("span", { className: "hi-run-dot", "data-s": live2 ? server.state : "found" }) : null
   ] });
 }
 function ViewTab({ current, id: id2, icon: name2, label, badge }) {
@@ -30844,11 +30543,11 @@ function TreeRow({ entry, depth, open, active, ctxOn, code, onToggle, onContext 
 function InlineName({ initial, onDone }) {
   let ref = useRef2(null), done = useRef2(!1);
   useEffect2(() => {
-    let el2 = ref.current;
-    if (!el2) return;
-    el2.focus();
+    let el = ref.current;
+    if (!el) return;
+    el.focus();
     let dot3 = initial.lastIndexOf(".");
-    el2.setSelectionRange(0, dot3 > 0 ? dot3 : initial.length);
+    el.setSelectionRange(0, dot3 > 0 ? dot3 : initial.length);
   }, []);
   let finish = (v) => {
     done.current || (done.current = !0, onDone(v));
@@ -30868,7 +30567,7 @@ function InlineName({ initial, onDone }) {
   );
 }
 function SearchView({ root }) {
-  let [q, setQ] = useState2(() => ctx.storage.get("search.q", "")), [regex, setRegex] = useState2(!1), [caseSens, setCase] = useState2(!1), [glob, setGlob] = useState2(""), [res, setRes] = useState2(null), [err, setErr] = useState2(""), [collapsed2, setCollapsed] = useState2(/* @__PURE__ */ new Set()), focus = useValue2($searchFocus), inputRef = useRef2(null), seq = useRef2(0);
+  let [q, setQ] = useState2(() => ctx.storage.get("search.q", "")), [regex, setRegex] = useState2(!1), [caseSens, setCase] = useState2(!1), [glob, setGlob] = useState2(""), [res, setRes] = useState2(null), [err, setErr] = useState2(""), [collapsed, setCollapsed] = useState2(/* @__PURE__ */ new Set()), focus = useValue2($searchFocus), inputRef = useRef2(null), seq = useRef2(0);
   useEffect2(() => inputRef.current?.focus(), [focus]), useEffect2(() => {
     ctx.storage.set("search.q", q);
     let id2 = ++seq.current;
@@ -30915,7 +30614,7 @@ function SearchView({ root }) {
           let n = new Set(s);
           return n.has(path) ? n.delete(path) : n.add(path), n;
         }), children: [
-          icon(collapsed2.has(path) ? "chevron-right" : "chevron-down", 13),
+          icon(collapsed.has(path) ? "chevron-right" : "chevron-down", 13),
           icon(fileIcon(path)),
           /* @__PURE__ */ jsxs2("span", { className: "hi-name", children: [
             baseName(path),
@@ -30924,7 +30623,7 @@ function SearchView({ root }) {
           ] }),
           /* @__PURE__ */ jsx3("span", { className: "hi-dim", children: hits.length })
         ] }),
-        collapsed2.has(path) ? null : hits.map((h) => /* @__PURE__ */ jsx3("div", { className: "hi-row hi-hit", title: `${h.rel}:${h.line}`, onClick: () => void openFile(h.path, { line: h.line, col: h.col + 1, preview: !0 }), children: /* @__PURE__ */ jsx3("span", { className: "hi-name", children: /* @__PURE__ */ jsx3(Highlighted, { text: h.text.trimStart(), q, regex, caseSens }) }) }, `${h.line}:${h.col}`))
+        collapsed.has(path) ? null : hits.map((h) => /* @__PURE__ */ jsx3("div", { className: "hi-row hi-hit", title: `${h.rel}:${h.line}`, onClick: () => void openFile(h.path, { line: h.line, col: h.col + 1, preview: !0 }), children: /* @__PURE__ */ jsx3("span", { className: "hi-name", children: /* @__PURE__ */ jsx3(Highlighted, { text: h.text.trimStart(), q, regex, caseSens }) }) }, `${h.line}:${h.col}`))
       ] }, path))
     ] })
   ] });
@@ -30987,8 +30686,8 @@ async function openDiff(path, code) {
   head.text != null && post({ type: "setDiff", path, original: head.text });
 }
 var TOKENS = ["--font-sans", "--font-mono", "--ui-text-primary", "--ui-text-secondary", "--ui-text-tertiary", "--ui-text-quaternary", "--ui-accent", "--ui-accent-secondary", "--ui-stroke-primary", "--ui-stroke-secondary", "--ui-stroke-tertiary", "--ui-stroke-quaternary", "--ui-bg-primary", "--ui-bg-secondary", "--ui-bg-tertiary", "--ui-bg-quaternary", "--ui-bg-elevated", "--ui-bg-input", "--ui-bg-editor", "--ui-editor-surface-background", "--ui-selection-background", "--ui-row-hover-background", "--ui-row-active-background", "--ui-control-hover-background", "--ui-control-active-background", "--ui-diff-add-background", "--ui-diff-remove-background", "--ui-diff-add-foreground", "--ui-diff-remove-foreground", "--ui-red", "--ui-green", "--ui-yellow", "--ui-orange", "--ui-blue", "--ui-purple", "--ui-cyan"];
-function readLook(el2) {
-  let cs = getComputedStyle(el2), vars = {};
+function readLook(el) {
+  let cs = getComputedStyle(el), vars = {};
   for (let name2 of TOKENS) {
     let v = cs.getPropertyValue(name2).trim();
     v && (vars[name2] = v);
@@ -31018,10 +30717,49 @@ function EditorTile() {
     /* @__PURE__ */ jsx3(EditorPane, {})
   ] });
 }
+function Workbench() {
+  let panel = useValue2($explorerPanel), [w, setW] = useState2(() => clampSide(Number(ctx.storage.get("explorerWidth", 300)))), width = useRef2(w);
+  return /* @__PURE__ */ jsxs2("div", { className: "hi-wb", children: [
+    /* @__PURE__ */ jsx3(Styles, {}),
+    /* @__PURE__ */ jsx3("div", { className: "hi-wb-side", style: { display: panel ? "flex" : "none", width: w }, children: /* @__PURE__ */ jsx3(ExplorerTile, {}) }),
+    /* @__PURE__ */ jsx3(
+      "div",
+      {
+        className: "hi-wb-sash",
+        role: "separator",
+        "aria-orientation": "vertical",
+        "aria-label": "Resize the Explorer",
+        "aria-valuenow": w,
+        tabIndex: panel ? 0 : -1,
+        style: { display: panel ? void 0 : "none" },
+        onPointerDown: (e) => {
+          e.preventDefault();
+          let x0 = e.clientX, w0 = width.current, sash = e.currentTarget;
+          sash.setPointerCapture(e.pointerId);
+          let move = (ev) => {
+            width.current = clampSide(w0 + ev.clientX - x0), setW(width.current);
+          }, up = () => {
+            sash.removeEventListener("pointermove", move), sash.removeEventListener("pointerup", up), ctx.storage.set("explorerWidth", width.current);
+          };
+          sash.addEventListener("pointermove", move), sash.addEventListener("pointerup", up);
+        },
+        onKeyDown: (e) => {
+          let d = e.key === "ArrowLeft" ? -16 : e.key === "ArrowRight" ? 16 : 0;
+          d && (e.preventDefault(), width.current = clampSide(width.current + d), setW(width.current), ctx.storage.set("explorerWidth", width.current));
+        },
+        onDoubleClick: () => {
+          width.current = 300, setW(300), ctx.storage.set("explorerWidth", 300);
+        }
+      }
+    ),
+    /* @__PURE__ */ jsx3("div", { className: "hi-wb-main", children: /* @__PURE__ */ jsx3(EditorTile, {}) })
+  ] });
+}
+var clampSide = (n) => Math.min(640, Math.max(180, Number.isFinite(n) ? Math.round(n) : 300));
 function EditorPane() {
   let tabs = useValue2($tabs), active = useValue2($active), banners = useValue2($banners), confirmClose = useValue2($confirmClose), accent = useValue2($accentOverride), frameRef = useRef2(null), editorRef = useRef2(null), onFrameLoad = useCallback(() => {
-    let el2 = frameRef.current, win = el2?.contentWindow;
-    if (!el2 || !win || !win.document.getElementById("editor")) return;
+    let el = frameRef.current, win = el?.contentWindow;
+    if (!el || !win || !win.document.getElementById("editor")) return;
     let old = editorRef.current;
     detachFrame(old);
     try {
@@ -31029,12 +30767,12 @@ function EditorPane() {
     } catch {
     }
     let f = null;
-    f = mountEditor(win, (m) => queueMicrotask(() => f && onFrameMessage(f, m))), editorRef.current = f, attachFrame(f, () => readLook(el2.parentElement || el2));
+    f = mountEditor(win, (m) => queueMicrotask(() => f && onFrameMessage(f, m))), editorRef.current = f, attachFrame(f, () => readLook(el.parentElement || el));
   }, []);
   useEffect2(() => {
-    let el2 = frameRef.current;
-    if (!el2) return;
-    el2.contentDocument?.readyState === "complete" && onFrameLoad();
+    let el = frameRef.current;
+    if (!el) return;
+    el.contentDocument?.readyState === "complete" && onFrameLoad();
     let timer = 0, repaint = () => {
       clearTimeout(timer), timer = window.setTimeout(postLook, 250);
     }, mo = new MutationObserver(repaint);
@@ -31198,16 +30936,47 @@ function ProjectEmpty({ fallback: fallback2 }) {
     !server && root && !candidates.length ? /* @__PURE__ */ jsx3("div", { style: { marginTop: 10 }, children: /* @__PURE__ */ jsx3(Button2, { size: "sm", variant: "ghost", onClick: () => void detectProject(!0), children: "Look for a UI in this folder again" }) }) : null
   ] }) });
 }
+function RunPanel() {
+  let server = useValue2($server), pending = useValue2($pagePending), picking = useValue2($picking), [showLog, setShowLog] = useState2(!1), url = server?.state === "ready" && server.url ? server.url : pending, canScript = !!ctx.preview?.executeJavaScript;
+  return useEffect2(() => {
+    server?.state === "exited" && server.exit_code && setShowLog(!0);
+  }, [server?.state]), /* @__PURE__ */ jsxs2("div", { className: "hi-run", children: [
+    /* @__PURE__ */ jsxs2("div", { className: "hi-run-tools", children: [
+      /* @__PURE__ */ jsx3("span", { className: "hi-dim", children: "Project UI" }),
+      /* @__PURE__ */ jsx3("span", { className: "hi-spacer" }),
+      /* @__PURE__ */ jsx3("button", { className: "hi-btn", "data-on": picking, "aria-pressed": picking, title: picking ? "Cancel the pick" : "Pick an element in the Browser pane and send it to the chat", disabled: !canScript, onClick: () => void pickElement(), children: icon("inspect") }),
+      /* @__PURE__ */ jsx3("button", { className: "hi-btn", title: "Reload the page in the Browser pane", disabled: !canScript, onClick: () => void reloadPreview(), children: icon("refresh") }),
+      /* @__PURE__ */ jsx3("button", { className: "hi-btn", title: "Show the Browser pane", onClick: () => ctx.runAction?.("view.showBrowser"), children: icon("globe") }),
+      /* @__PURE__ */ jsx3("button", { className: "hi-btn", title: "Open in your browser", disabled: !url, onClick: () => url && void ctx.os.openExternal?.(url), children: icon("link-external") })
+    ] }),
+    /* @__PURE__ */ jsx3(ProjectBar, { showLog, onToggleLog: () => setShowLog(!showLog) }),
+    /* @__PURE__ */ jsx3(TrustBannerSlot, {}),
+    /* @__PURE__ */ jsx3(StaleBanner, {}),
+    showLog ? /* @__PURE__ */ jsx3(ServerLog, {}) : null,
+    /* @__PURE__ */ jsx3("div", { className: "hi-run-body", children: url ? /* @__PURE__ */ jsxs2("div", { className: "hi-open-page", children: [
+      /* @__PURE__ */ jsx3(MessageTextContent, { media: !1, text: `[Open ${url.replace(/^https?:\/\//, "").replace(/\/$/, "")} in the Browser](${url})` }),
+      /* @__PURE__ */ jsxs2("div", { className: "hi-dim", children: [
+        "Opens in the app's Browser pane (Ctrl+click: your system browser). Pick elements there with ",
+        icon("inspect", 12),
+        " above."
+      ] })
+    ] }) : /* @__PURE__ */ jsx3(ProjectEmpty, { fallback: "No web UI found in this folder. When one runs, its page opens from here." }) })
+  ] });
+}
 function ServerLog() {
   let server = useValue2($server), ref = useRef2(null);
   return useLayoutEffect2(() => {
-    let el2 = ref.current;
-    el2 && (el2.scrollTop = el2.scrollHeight);
+    let el = ref.current;
+    el && (el.scrollTop = el.scrollHeight);
   }, [server?.log.length]), server ? /* @__PURE__ */ jsx3("pre", { ref, className: "hi-log", children: server.log.join(`
 `) || "No output yet." }) : null;
 }
+function TrustBannerSlot() {
+  let ask = useValue2($askTrust);
+  return ask ? /* @__PURE__ */ jsx3(TrustBanner, { cand: ask }) : null;
+}
 function BrowserTile() {
-  return /* @__PURE__ */ jsx3(FullBrowserTile, {});
+  return null;
 }
 function TrustBanner({ cand }) {
   return /* @__PURE__ */ jsxs2("div", { className: "hi-banner", children: [
@@ -31237,7 +31006,7 @@ function TrustBanner({ cand }) {
 var TOGGLES = [
   { id: "explorer", icon: "layout-sidebar-left", label: "Explorer" },
   { id: "editor", icon: "code", label: "Editor" },
-  { id: "browser", icon: "globe", label: "Browser" }
+  { id: "browser", icon: "play-circle", label: "Project UI" }
 ];
 function LayoutToggles() {
   let open = useValue2($openTiles);
@@ -31262,8 +31031,8 @@ function LayoutToggles() {
   ] });
 }
 function IdeRowBadge({ sessionId }) {
-  let chats = useValue2($ideChats), ref = useRef2(null), isIde = !!chats[sessionId];
-  return useIdeRowClick(ref, isIde, sessionId), isIde ? /* @__PURE__ */ jsx3(
+  let chats = useValue2($ideChats), ref = useRef2(null);
+  return !chats[sessionId] ? null : /* @__PURE__ */ jsx3(
     "span",
     {
       ref,
@@ -31277,7 +31046,7 @@ function IdeRowBadge({ sessionId }) {
       onPointerDown: (e) => e.stopPropagation(),
       children: "IDE"
     }
-  ) : null;
+  );
 }
 function Dialogs() {
   return /* @__PURE__ */ jsxs2(Fragment3, { children: [
@@ -31324,7 +31093,7 @@ function QuickOpen() {
         }
       ),
       /* @__PURE__ */ jsxs2("div", { className: "hi-qo-list", children: [
-        results.map((rel, i) => /* @__PURE__ */ jsxs2("div", { ref: i === sel ? (el2) => el2?.scrollIntoView({ block: "nearest" }) : void 0, className: "hi-qo-row", "data-on": i === sel, onMouseEnter: () => setSel2(i), onClick: () => choose(rel), children: [
+        results.map((rel, i) => /* @__PURE__ */ jsxs2("div", { ref: i === sel ? (el) => el?.scrollIntoView({ block: "nearest" }) : void 0, className: "hi-qo-row", "data-on": i === sel, onMouseEnter: () => setSel2(i), onClick: () => choose(rel), children: [
           icon(fileIcon(rel)),
           /* @__PURE__ */ jsx3("span", { children: baseName(rel) }),
           /* @__PURE__ */ jsx3("span", { className: "hi-dim", style: { fontSize: 11.5 }, children: dirName(rel) === rel ? "" : dirName(rel) })
@@ -31481,7 +31250,7 @@ function SettingsPage() {
   return /* @__PURE__ */ jsxs2("div", { children: [
     /* @__PURE__ */ jsx3(ToggleRow, { label: "Follow the chat's folder", description: "The Explorer opens the working directory of the chat you are looking at.", checked: s.followSession, onChange: (v) => setSetting("followSession", v) }),
     /* @__PURE__ */ jsx3(ToggleRow, { label: "Review agent edits", description: "When Hermes edits an open file, show the change inline with Keep and Undo.", checked: s.reviewAgentEdits, onChange: (v) => setSetting("reviewAgentEdits", v) }),
-    /* @__PURE__ */ jsx3(ToggleRow, { label: "Run the project's UI automatically", description: "When the IDE opens a project you have trusted, start its dev server and show it in the Browser column.", checked: s.autoRunUi, onChange: (v) => setSetting("autoRunUi", v) }),
+    /* @__PURE__ */ jsx3(ToggleRow, { label: "Run the project's UI automatically", description: "When the IDE opens a project you have trusted, start its dev server; its page then opens from the Project UI column.", checked: s.autoRunUi, onChange: (v) => setSetting("autoRunUi", v) }),
     /* @__PURE__ */ jsx3(TrustedProjects, {}),
     /* @__PURE__ */ jsx3(ToggleRow, { label: "Show hidden files", checked: s.showHidden, onChange: (v) => setSetting("showHidden", v) }),
     /* @__PURE__ */ jsx3(ToggleRow, { label: "Word wrap", checked: s.wordWrap, onChange: (v) => setSetting("wordWrap", v) }),
@@ -31521,7 +31290,7 @@ var PLUGIN_ID = "hermes-ide", WINDOWS_KEY = "ideWindows", plugin_default = {
   // user once per site before any runs (ctx.preview).
   capabilities: ["preview.executeJavaScript"],
   register(ctx2) {
-    bindContext(ctx2, { explorer: () => /* @__PURE__ */ jsx4(ExplorerTile, {}), editor: () => /* @__PURE__ */ jsx4(EditorTile, {}), browser: () => /* @__PURE__ */ jsx4(BrowserTile, {}) }), loadSettings(), loadIdeChats();
+    bindContext(ctx2, { explorer: () => /* @__PURE__ */ jsx4(ExplorerTile, {}), editor: () => /* @__PURE__ */ jsx4(Workbench, {}), browser: () => /* @__PURE__ */ jsx4(BrowserTile, {}) }), loadSettings(), loadIdeChats();
     let area = (name2, fallback2) => sdk[name2] ?? fallback2;
     ctx2.registerMany([
       {
@@ -31576,9 +31345,9 @@ var PLUGIN_ID = "hermes-ide", WINDOWS_KEY = "ideWindows", plugin_default = {
           ui: !!p.ui,
           req: p.request_id || void 0
         });
-      }), initIdeChats(), initSidebar(), ctx2.storage.get("welcomed-v3", !1) || (ctx2.storage.set("welcomed-v3", !0), notify(
+      }), initIdeChats(), ctx2.storage.get("welcomed-v3", !1) || (ctx2.storage.set("welcomed-v3", !0), notify(
         "info",
-        "Press Ctrl+Alt+I, or click IDE in the status bar, to open this chat in its own IDE window. IDE chats get their own group in the sidebar.",
+        "Press Ctrl+Alt+I, or click IDE in the status bar, to open this chat in its own IDE window. IDE chats carry an IDE badge; the arrow beside IDE lists them.",
         "Hermes IDE"
       ));
       return;
@@ -31592,14 +31361,14 @@ var PLUGIN_ID = "hermes-ide", WINDOWS_KEY = "ideWindows", plugin_default = {
       { id: "explorer", label: "IDE: Show Explorer", run: () => revealSidebar("explorer") },
       { id: "toggleExplorer", label: "IDE: Toggle Explorer Column", run: () => runCommand("toggleSidebar"), keywords: ["sidebar", "files", "column"] },
       { id: "toggleEditor", label: "IDE: Toggle Editor Column", run: () => runCommand("toggleEditor"), keywords: ["code", "column"] },
-      { id: "toggleBrowser", label: "IDE: Toggle Browser Column", keys: ["mod+alt+b"], run: () => runCommand("toggleBrowser"), keywords: ["preview", "web", "browser", "dev server", "column"] },
+      { id: "toggleBrowser", label: "IDE: Toggle Project UI Column", keys: ["mod+alt+b"], run: () => runCommand("toggleBrowser"), keywords: ["preview", "web", "browser", "dev server", "column"] },
       { id: "resetLayout", label: "IDE: Reset Column Layout", run: () => void resetLayout(), keywords: ["arrange", "columns", "default"] },
       { id: "runUi", label: "IDE: Run Project's UI", keys: ["mod+alt+r"], run: () => void startUi(), keywords: ["dev server", "npm run dev", "vite", "next", "start", "preview"] },
       { id: "stopUi", label: "IDE: Stop Project's UI", run: () => void stopUi(), keywords: ["dev server", "stop"] },
       {
         id: "pick",
         label: "IDE: Pick Element in Browser",
-        run: () => void pickElement(document.querySelector('.hi-tile[data-tile="browser"] webview')),
+        run: () => void pickElement(void 0),
         keywords: ["inspect", "select", "component", "annotate"]
       },
       { id: "scm", label: "IDE: Show Source Control", run: () => revealSidebar("scm"), keywords: ["git"] },
@@ -31640,7 +31409,7 @@ var PLUGIN_ID = "hermes-ide", WINDOWS_KEY = "ideWindows", plugin_default = {
     };
     beat();
     let beatTimer = window.setInterval(beat, 6e4);
-    ctx2.onDispose(() => clearInterval(beatTimer)), ctx2.addEventListener(window, "pagehide", () => announce(!1)), ctx2.onDispose(host5.state.focusedStoredSessionId.listen(() => beat())), ctx2.onEvent("tool.complete", onToolComplete), ctx2.onEvent("message.complete", () => void applyPendingCwd()), ctx2.addEventListener(window, "focus", () => scheduleRefresh()), ctx2.addEventListener(window, "pagehide", saveLayout), ctx2.onDispose(host5.state.focusedStoredSessionId.subscribe((id2) => void switchSession(id2 || sid))), ctx2.onDispose(host5.state.cwd.subscribe(() => void syncRoot())), ctx2.onDispose(disposeTiles), initBrowser(), watchLayout(), setupIdeWindow().then(() => {
+    ctx2.onDispose(() => clearInterval(beatTimer)), ctx2.addEventListener(window, "pagehide", () => announce(!1)), ctx2.onDispose(host5.state.focusedStoredSessionId.listen(() => beat())), ctx2.onEvent("tool.complete", onToolComplete), ctx2.onEvent("message.complete", () => void applyPendingCwd()), ctx2.addEventListener(window, "focus", () => scheduleRefresh()), ctx2.addEventListener(window, "pagehide", saveLayout), ctx2.onDispose(host5.state.focusedStoredSessionId.subscribe((id2) => void switchSession(id2 || sid))), ctx2.onDispose(host5.state.cwd.subscribe(() => void syncRoot())), ctx2.onDispose(disposeTiles), initBrowser(), ctx2.onDispose($view.listen(() => noteTiles())), setupIdeWindow().then(() => {
       let p = takePending();
       p && handleOpenRequest(p);
     });
