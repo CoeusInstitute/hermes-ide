@@ -904,7 +904,7 @@ function relToRoot(path) {
 }
 
 // src/browser.ts
-var $candidates = atom2([]), $selected = atom2(null), $server = atom2(null), $askTrust = atom2(null), selected = () => $candidates.get().find((c) => c.id === $selected.get()) ?? null;
+var $candidates = atom2([]), $selected = atom2(null), $server = atom2(null), $askTrust = atom2(null), $backendStale = atom2(!1), selected = () => $candidates.get().find((c) => c.id === $selected.get()) ?? null;
 function trusted() {
   let v = ctx.storage.get("trustedProjects", []);
   return Array.isArray(v) ? v : [];
@@ -919,8 +919,9 @@ async function detectProject(force = !1) {
   detectedFor = pathKey(root);
   let r;
   try {
-    r = await call("/project/detect", { root });
-  } catch {
+    r = await call("/project/detect", { root }), $backendStale.set(!1);
+  } catch (e) {
+    isMissingBackend(e) && $backendStale.set(!0);
     return;
   }
   $candidates.set(r.candidates);
@@ -1926,7 +1927,7 @@ function Webview({ nav, onNav, onRef }) {
   ] });
 }
 function BrowserTile() {
-  let nav = useValue($browserNav), server = useValue($server), candidates = useValue($candidates), selectedId = useValue($selected), ask = useValue($askTrust), picking = useValue($picking), root = useValue($root), [url, setUrl] = useState(nav?.url ?? ""), [input, setInput] = useState(nav?.url ?? ""), [showLog, setShowLog] = useState(!1), view = useRef(null), guest = () => view.current, isWebview = !!window.hermesDesktop;
+  let nav = useValue($browserNav), server = useValue($server), candidates = useValue($candidates), selectedId = useValue($selected), ask = useValue($askTrust), picking = useValue($picking), stale = useValue($backendStale), root = useValue($root), [url, setUrl] = useState(nav?.url ?? ""), [input, setInput] = useState(nav?.url ?? ""), [showLog, setShowLog] = useState(!1), view = useRef(null), guest = () => view.current, isWebview = !!window.hermesDesktop;
   useEffect(() => {
     nav && (setInput(nav.url), url || setUrl(nav.url));
   }, [nav?.at]);
@@ -2001,6 +2002,14 @@ function BrowserTile() {
       ] }) : null
     ] }) : null,
     ask ? /* @__PURE__ */ jsx(TrustBanner, { cand: ask }) : null,
+    stale ? /* @__PURE__ */ jsxs("div", { className: "hi-banner", children: [
+      icon("warning"),
+      /* @__PURE__ */ jsxs("span", { children: [
+        "The IDE was updated, but the gateway still runs its previous backend, so project detection and dev servers are off. Run ",
+        /* @__PURE__ */ jsx("code", { children: "hermes gateway restart" }),
+        " (or restart Hermes), then reopen this window."
+      ] })
+    ] }) : null,
     showLog && server ? /* @__PURE__ */ jsx("pre", { className: "hi-log", children: server.log.join(`
 `) || "No output yet." }) : null,
     /* @__PURE__ */ jsx("div", { className: "hi-web", children: isWebview ? url ? /* @__PURE__ */ jsx(Webview, { nav: nav && nav.url ? nav : { url, at: 0 }, onRef: (el2) => view.current = el2, onNav: (u) => {

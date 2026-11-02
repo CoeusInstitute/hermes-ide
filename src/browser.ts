@@ -4,7 +4,7 @@
 
 import { atom, host } from '@hermes/plugin-sdk'
 
-import { $root, $runUiRequest, $settings, call, ctx, notify, openInBrowser, openTile } from './core'
+import { $root, $runUiRequest, $settings, call, ctx, isMissingBackend, notify, openInBrowser, openTile } from './core'
 import { fileRef, isInside, pathKey } from './util'
 
 export interface Candidate {
@@ -34,6 +34,9 @@ export const $selected = atom<string | null>(null)
 export const $server = atom<Server | null>(null)
 /** A project found that the user has not trusted yet: the column asks before running its code. */
 export const $askTrust = atom<Candidate | null>(null)
+/** The gateway still runs an older IDE backend without project detection (a plugin update's
+ *  Python loads only after a gateway restart). */
+export const $backendStale = atom(false)
 
 const selected = () => $candidates.get().find(c => c.id === $selected.get()) ?? null
 
@@ -57,8 +60,11 @@ export async function detectProject(force = false) {
   let r: { candidates: Candidate[]; servers: Server[] }
   try {
     r = await call('/project/detect', { root })
-  } catch {
-    return // older backend or not a folder: no UI support, the column still browses
+    $backendStale.set(false)
+  } catch (e) {
+    // The rest of the backend answers but this route does not: an update the gateway has not loaded.
+    if (isMissingBackend(e)) $backendStale.set(true)
+    return
   }
   $candidates.set(r.candidates)
   const running = r.servers.find(s => s.state !== 'exited')

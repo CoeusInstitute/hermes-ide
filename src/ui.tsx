@@ -25,6 +25,7 @@ import FRAME_HTML from 'virtual:frame-html'
 
 import {
   $askTrust,
+  $backendStale,
   $candidates,
   $picking,
   $selected,
@@ -939,6 +940,7 @@ export function BrowserTile() {
   const selectedId = useValue($selected)
   const ask = useValue($askTrust)
   const picking = useValue($picking)
+  const stale = useValue($backendStale)
   const root = useValue($root)
   const [url, setUrl] = useState(nav?.url ?? '')
   const [input, setInput] = useState(nav?.url ?? '')
@@ -1010,6 +1012,14 @@ export function BrowserTile() {
         </div>
       ) : null}
       {ask ? <TrustBanner cand={ask} /> : null}
+      {stale ? (
+        <div className="hi-banner">
+          {icon('warning')}
+          <span>
+            The IDE was updated, but the gateway still runs its previous backend, so project detection and dev servers are off. Run <code>hermes gateway restart</code> (or restart Hermes), then reopen this window.
+          </span>
+        </div>
+      ) : null}
       {showLog && server ? <pre className="hi-log">{server.log.join('\n') || 'No output yet.'}</pre> : null}
       <div className="hi-web">
         {!isWebview ? (

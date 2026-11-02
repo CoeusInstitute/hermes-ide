@@ -28,7 +28,7 @@ The backend routes mount without a gateway restart on current Hermes; on an olde
 
 The repository is private today. Installing it needs a GitHub login with access (`gh auth login`, or `GITHUB_TOKEN` in your `.env`). Make the repository public to let anyone install it.
 
-**Update.** **Capabilities → Plugins** offers updates, or run `hermes plugins update hermes-ide`. After a terminal update, run **Reload desktop plugins** from the command palette (or restart the app) so the open windows load the new desktop half.
+**Update.** **Capabilities → Plugins** offers updates, or run `hermes plugins update hermes-ide`. After a terminal update, run **Reload desktop plugins** from the command palette (or restart the app) so the open windows load the new desktop half. When an update changes the backend (as v0.3 does: project detection and dev servers), a gateway that was already running keeps the previous backend until `hermes gateway restart` (or an app restart); the Browser column says so when it finds the gateway behind. A first install needs no restart.
 
 **Uninstall.** Run `hermes plugins remove hermes-ide`. That removes the package, its `plugins.enabled` entry and its install record. The running Desktop keeps the IDE's Desktop half until that copy goes, so also delete `desktop-plugins/hermes-ide` in your Hermes home (`%LOCALAPPDATA%\hermes` on Windows, `~/.hermes` elsewhere); the app unloads it at once, and the IDE button and the sidebar group disappear. Small settings the IDE kept in the app's own storage (tab lists, column layout, trusted projects, the IDE chat list) stay behind and are reused if you reinstall.
 
