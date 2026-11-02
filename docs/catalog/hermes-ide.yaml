@@ -1,5 +1,5 @@
 # Catalog entry for NousResearch/hermes-agent: copy to plugin-catalog/hermes-ide.yaml.
-# Fill CATALOG_SHA with the full 40-character commit of the release's catalog tag (git rev-parse catalog-v0.6.3^{commit})
+# Fill CATALOG_SHA with the full 40-character commit of the release's catalog tag (git rev-parse catalog-v0.6.4^{commit})
 # in `sha` and in the image and screenshot URLs.
 name: hermes-ide
 repo: https://github.com/CoeusInstitute/hermes-ide
@@ -16,7 +16,7 @@ maintainer: CoeusInstitute
 tier: community
 category: desktop
 requires_hermes: ">=0.22.5"
-version: "0.6.3"
+version: "0.6.4"
 docs_url: https://github.com/CoeusInstitute/hermes-ide#readme
 screenshots:
   - https://raw.githubusercontent.com/CoeusInstitute/hermes-ide/CATALOG_SHA/docs/images/ide-window.png

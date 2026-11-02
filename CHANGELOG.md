@@ -2,6 +2,11 @@
 
 All notable changes to Hermes IDE. Versions follow the `version` in `plugin.yaml`.
 
+## 0.6.4 (2026-11-02)
+
+- **The element picker reports an element's own styles, not its hover styles.** While picking, the pointer now rests on a transparent shield above the page instead of the element, so `:hover` rules never apply to what you pick. Before, picking a button reported its hover color as its background. The shield steps aside only for the picker's own hit test. Check: `dev/picker-check.mjs` runs the picker in a local Chrome or Edge with real mouse input; it passes on this release and fails on 0.6.3. Verified live: four picks of a hovered button all reported the base color.
+- **Repository history rewritten.** Old screenshot versions that showed local file paths were removed from every commit, and every branch and tag moved to new commits. Clones made before this release should be re-cloned; installed copies update through Capabilities → Plugins as usual.
+
 ## 0.6.3 (2026-11-02)
 
 - **A file opened later docks the editor beside the Explorer at a usable width.** A new IDE workspace saves its fitted Explorer, Browser and Chat widths before any file is open. Opening a file then docked the editor just left of the chat and re-applied the page and chat widths as if you had chosen them, which left the editor at its 385 px floor. The editor now goes where the default order has it (right of the Explorer), and saved widths carry over only to the same set of columns; the Explorer's always does. Measured live at 3840 px: Explorer 345, Editor 1421, Browser 1230, Chat 845.

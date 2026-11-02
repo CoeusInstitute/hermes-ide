@@ -1112,9 +1112,14 @@ var PICKER = String.raw`(() => new Promise(resolve => {
   if (typeof window.__hermesIdePick === 'function') window.__hermesIdePick(null)
   const box = document.createElement('div')
   const tag = document.createElement('div')
+  // The pointer rests on this shield, not the page, so the picked element is never in :hover and
+  // its reported styles are its own. shortcut: wheel scrolls the page but not inner scroll panes
+  // while picking; forward wheel events to the element underneath if users need that.
+  const shield = document.createElement('div')
+  shield.style.cssText = 'position:fixed;inset:0;z-index:2147483646;cursor:crosshair;background:transparent'
   box.style.cssText = 'position:fixed;pointer-events:none;z-index:2147483647;border:2px solid #3b82f6;background:rgba(59,130,246,.12);border-radius:3px;display:none'
   tag.style.cssText = 'position:fixed;pointer-events:none;z-index:2147483647;font:11px/1.6 ui-monospace,monospace;color:#fff;background:#1d4ed8;padding:0 6px;border-radius:3px;white-space:nowrap;display:none'
-  document.documentElement.append(box, tag)
+  document.documentElement.append(shield, box, tag)
   let cur = null
   const esc = s => (window.CSS && CSS.escape ? CSS.escape(s) : s)
   const unique = s => { try { return document.querySelectorAll(s).length === 1 } catch (e) { return false } }
@@ -1147,11 +1152,15 @@ var PICKER = String.raw`(() => new Promise(resolve => {
     }
     return parts.join(' > ')
   }
-  // The deepest element under the pointer, through open shadow roots.
+  // The deepest element under the pointer, through open shadow roots. The shield steps aside for
+  // this synchronous test only; no frame renders in between, so the page never sees the pointer.
   const hit = (x, y) => {
-    let el = document.elementFromPoint(x, y)
-    while (el && el.shadowRoot) { const inner = el.shadowRoot.elementFromPoint(x, y); if (!inner || inner === el) break; el = inner }
-    return el
+    shield.style.pointerEvents = 'none'
+    try {
+      let el = document.elementFromPoint(x, y)
+      while (el && el.shadowRoot) { const inner = el.shadowRoot.elementFromPoint(x, y); if (!inner || inner === el) break; el = inner }
+      return el
+    } finally { shield.style.pointerEvents = 'auto' }
   }
   const paint = () => {
     if (!cur || !cur.isConnected) { box.style.display = tag.style.display = 'none'; return }
@@ -1232,7 +1241,7 @@ var PICKER = String.raw`(() => new Promise(resolve => {
     for (const [t, f] of handlers) removeEventListener(t, f, true)
     removeEventListener('scroll', paint, true)
     removeEventListener('resize', paint)
-    box.remove(); tag.remove()
+    box.remove(); tag.remove(); shield.remove()
     resolve(v)
   }
   window.__hermesIdePick = done

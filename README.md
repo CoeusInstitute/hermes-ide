@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/version-0.6.3-6366f1?style=flat-square" alt="Version 0.6.3"></a>
+  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/version-0.6.4-6366f1?style=flat-square" alt="Version 0.6.4"></a>
   <a href="https://hermes-agent.nousresearch.com/docs/user-guide/desktop"><img src="https://img.shields.io/badge/Hermes-%E2%89%A50.22.5-4b5280?style=flat-square" alt="Requires Hermes 0.22.5 or newer"></a>
   <a href="https://github.com/CoeusInstitute/hermes-ide/actions/workflows/ci.yml"><img src="https://github.com/CoeusInstitute/hermes-ide/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI status"></a>
   <a href="#security-and-privacy"><img src="https://img.shields.io/badge/install%20scan-safe-2f8a57?style=flat-square" alt="Install scan: safe"></a>
@@ -226,7 +226,7 @@ The full build also lists IDE chats in their own **IDE** group under SESSIONS (i
 
 |  | Catalog build | Full build |
 |---|---|---|
-| Where | a tagged commit per release (`catalog-v0.6.3`), pinned by the Hermes plugin catalog | `main` (what **Install from Git** gets) |
+| Where | a tagged commit per release (`catalog-v0.6.4`), pinned by the Hermes plugin catalog | `main` (what **Install from Git** gets) |
 | Surface | the Desktop plugin SDK only: passes `hermes plugins validate` | the SDK plus a few reads of the app's own markup |
 | Explorer | a resizable panel inside the Editor column | its own column |
 | Project UI | a **Run** view beside Explorer, Search and Source Control; the page opens in the app's Browser pane | a Browser column of its own (address bar, DevTools, the page) |
@@ -253,7 +253,6 @@ What the plugin does on your machines, so you can decide before installing:
 ## Known limits
 
 - The inline review covers files that are open when the agent edits them. A file the agent changed while it was closed opens with the new text; the chat's own **Review** card still shows that change.
-- The picker reads an element's styles while the pointer is over it, so `:hover` rules show in the reported styles.
 - No language server yet: highlighting, folding, brackets and word completion, but no go-to-definition or diagnostics.
 - Python web UIs (Streamlit, Flask, Django, Gradio) are not detected yet. Open their address in the app's Browser.
 - Against a remote Hermes backend, the dev server runs on the remote machine, so its `localhost` page is not reachable from this one.
@@ -290,6 +289,7 @@ cd dev && npm ci
 npm run build          # catalog build → desktop/plugin.js
 npm run build:full     # full build → desktop/plugin.js
 npm test               # helper, layout and grammar-table tests
+node picker-check.mjs  # the element picker in a local Chrome or Edge, real mouse input
 cd .. && python -m pytest tests -q   # with pytest, fastapi and httpx installed; see docs/DEVELOPING.md
 hermes plugins validate .   # the catalog's admission checks (catalog build)
 ```
