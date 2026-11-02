@@ -10,7 +10,9 @@ The IDE does not run its own chat. It wraps the Desktop's real session chat with
 
 You need Hermes Desktop 0.22 or newer (the release that ships `host.openWorkspace`, `host.composer` and the plugin package installer).
 
-**From the Desktop app.** Open **Capabilities → Plugins → Install from Git**, enter `CoeusInstitute/hermes-ide`, keep both the Agent and Desktop targets checked, and confirm.
+**From the Desktop app (recommended).** Open **Capabilities → Plugins → Install from Git**, enter `CoeusInstitute/hermes-ide`, keep both the Agent plugin and Desktop UI targets checked, and click **Install**. The dialog installs both halves and turns them on at once; the **EXPLORER** tab appears in the sidebar without a restart or a Rescan.
+
+**From a link.** `hermes://plugin/install?repo=CoeusInstitute/hermes-ide&enable=1` opens the same Desktop install dialog. Nothing installs until you confirm.
 
 **From a terminal.**
 
@@ -18,9 +20,9 @@ You need Hermes Desktop 0.22 or newer (the release that ships `host.openWorkspac
 hermes plugins install CoeusInstitute/hermes-ide --enable
 ```
 
-**From a link.** `hermes://plugin/install?repo=CoeusInstitute/hermes-ide&enable=1` opens the Desktop install dialog. Nothing installs until you confirm.
+The terminal installs and enables the agent half only. If Hermes Desktop is already open, it does not pick up the new desktop half; restart the app. Then search `Hermes IDE` under **Capabilities → Plugins** and switch **Desktop: Hermes IDE** on (a terminal install leaves the desktop half off, like every package's desktop half). Prefer the Desktop install above, which needs neither step.
 
-Then turn on the Desktop half: **Capabilities → Plugins**, search `Hermes IDE`, switch **Desktop: Hermes IDE** on. The desktop half ships off by default, like every package's desktop half. The backend routes mount without a restart on current Hermes; on an older build run `hermes gateway restart` once.
+The backend routes mount without a gateway restart on current Hermes; on an older build run `hermes gateway restart` once.
 
 The repository is private today. Installing it needs a GitHub login with access (`gh auth login`, or `GITHUB_TOKEN` in your `.env`). Make the repository public to let anyone install it.
 
