@@ -28,9 +28,11 @@ The backend routes mount without a gateway restart on current Hermes; on an olde
 
 The repository is private today. Installing it needs a GitHub login with access (`gh auth login`, or `GITHUB_TOKEN` in your `.env`). Make the repository public to let anyone install it.
 
+**Uninstall.** Run `hermes plugins remove hermes-ide`. That removes the package, its `plugins.enabled` entry and its install record. The running Desktop keeps the IDE's Desktop half until that copy goes, so also delete `desktop-plugins/hermes-ide` in your Hermes home (`%LOCALAPPDATA%\hermes` on Windows, `~/.hermes` elsewhere); the app unloads it at once, and the IDE button disappears. Small per-chat settings the IDE kept in the app's own storage (tab lists, Explorer width) stay behind and are reused if you reinstall.
+
 ## Use
 
-In a chat, press **Ctrl+Alt+I**, click **IDE** in the status bar, or run **IDE: Open in IDE Window** from the command palette (Ctrl+K). The chat needs at least one message first; a draft has no session yet.
+In a chat, press **Ctrl+Alt+I**, click **IDE** in the status bar, or run **IDE: Open in IDE Window** from the command palette (Ctrl+K). The IDE opens the chat on screen: from a page such as Capabilities it asks you to open a chat first. The chat needs at least one message; a draft has no session yet.
 
 The IDE window maximizes on the screen it opens on and sizes its columns to that screen: Explorer about 14% (220 to 340 px), chat about 30% (380 to 760 px, never below the app's own minimum chat width), editor the rest. A rendered page opens as a preview column of about a third of the window, taking its space from the editor; closing it gives the space back. Drag any seam to change a size; double-click the Explorer seam to reset it. If the chat already has a plain pop-out window, that window turns into the IDE instead of a second window opening.
 

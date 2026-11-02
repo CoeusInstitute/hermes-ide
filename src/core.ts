@@ -906,16 +906,25 @@ export const IDE_WINDOW = detectIdeWindow()
 
 export const $explorerHidden = atom(false)
 
-/** Main window: open the chat in focus in its own IDE window (or front the one it has). */
-export async function openIdeWindow(open?: { path: string; line?: number }) {
+/** Main window: open the chat on screen in its own IDE window (or front the one it has). */
+export async function openIdeWindow(open?: { path?: string; line?: number; sid?: string }) {
   if (IDE_WINDOW) {
     showIde()
     return
   }
-  const sid = host.state.focusedStoredSessionId.get()
+  const focused = host.state.focusedStoredSessionId.get()
+  // The IDE opens the chat you are looking at. On a page such as Capabilities the app still keeps
+  // a "focused" session (the first tile), which is not what the user means, so require the route
+  // to be that chat. An agent request names its own session and skips this check.
+  const routed = /^#\/([^/?#]+)/.exec(location.hash)?.[1]
+  const sid = open?.sid ?? (routed && decodeURIComponent(routed) === focused ? focused : null)
   const bridge = (window as any).hermesDesktop
   if (!sid) {
-    notify('info', 'Send the first message in this chat, then open it in the IDE.', 'Hermes IDE')
+    notify(
+      'info',
+      focused && routed ? 'Open the chat you want in the IDE, then click IDE.' : 'Send the first message in this chat, then open it in the IDE.',
+      'Hermes IDE'
+    )
     return
   }
   if (typeof bridge?.openSessionWindow !== 'function') {
@@ -990,6 +999,19 @@ function sizeSettled(quiet = 300, cap = 2500) {
       resolve()
     }
     window.addEventListener('resize', onResize)
+  })
+}
+
+/** Resolve once the window is close to the screen's width (the maximize can land well after the
+ *  first resize on large or multiple displays), or after 6 s if the user's window manager refuses. */
+function maximized(cap = 6000) {
+  return new Promise<void>(resolve => {
+    const start = Date.now()
+    const check = () => {
+      if (window.outerWidth >= screen.availWidth * 0.85 || Date.now() - start > cap) resolve()
+      else setTimeout(check, 100)
+    }
+    check()
   })
 }
 
@@ -1113,10 +1135,13 @@ export function watchPreviews() {
 
 /** The IDE window shows one chat: hide the app's session list there (pop-out layout state is
  *  memory-only, so this never touches the main window's sidebar). */
-function hideSessionList() {
-  const list = document.querySelector<HTMLElement>('[data-tree-group="grp-sessions"]')
-  if (list && list.getBoundingClientRect().width > 0) {
+async function hideSessionList() {
+  const visible = () => (document.querySelector<HTMLElement>('[data-tree-group="grp-sessions"]')?.getBoundingClientRect().width ?? 0) > 0
+  // The toggle only takes effect once the window is wide (a narrow window treats the list as an
+  // overlay), so verify and retry a few times instead of trusting one call.
+  for (let i = 0; i < 4 && visible(); i++) {
     ctx.runAction?.('view.toggleSidebar')
+    await new Promise(r => setTimeout(r, 400))
   }
 }
 
@@ -1144,8 +1169,9 @@ export async function setupIdeWindow() {
   }
   ensureEditor()
   styleIdeWindow()
+  await maximized()
   await sizeSettled()
-  hideSessionList()
+  await hideSessionList()
   await frames(2)
   await fitColumns()
   const pending = sessionStorage.getItem(PENDING_OPEN)

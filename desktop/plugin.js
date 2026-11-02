@@ -553,9 +553,13 @@ async function openIdeWindow(open) {
     showIde();
     return;
   }
-  let sid = host.state.focusedStoredSessionId.get(), bridge = window.hermesDesktop;
+  let focused = host.state.focusedStoredSessionId.get(), routed = /^#\/([^/?#]+)/.exec(location.hash)?.[1], sid = open?.sid ?? (routed && decodeURIComponent(routed) === focused ? focused : null), bridge = window.hermesDesktop;
   if (!sid) {
-    notify("info", "Send the first message in this chat, then open it in the IDE.", "Hermes IDE");
+    notify(
+      "info",
+      focused && routed ? "Open the chat you want in the IDE, then click IDE." : "Send the first message in this chat, then open it in the IDE.",
+      "Hermes IDE"
+    );
     return;
   }
   if (typeof bridge?.openSessionWindow != "function") {
@@ -604,6 +608,14 @@ function sizeSettled(quiet = 300, cap = 2500) {
       clearTimeout(timer), clearTimeout(cap_), window.removeEventListener("resize", onResize), resolve();
     }
     window.addEventListener("resize", onResize);
+  });
+}
+function maximized(cap = 6e3) {
+  return new Promise((resolve) => {
+    let start = Date.now(), check = () => {
+      window.outerWidth >= screen.availWidth * 0.85 || Date.now() - start > cap ? resolve() : setTimeout(check, 100);
+    };
+    check();
   });
 }
 async function dragSeam(edge, target) {
@@ -665,9 +677,10 @@ function watchPreviews() {
     clearTimeout(timer), obs.disconnect();
   });
 }
-function hideSessionList() {
-  let list = document.querySelector('[data-tree-group="grp-sessions"]');
-  list && list.getBoundingClientRect().width > 0 && ctx.runAction?.("view.toggleSidebar");
+async function hideSessionList() {
+  let visible = () => (document.querySelector('[data-tree-group="grp-sessions"]')?.getBoundingClientRect().width ?? 0) > 0;
+  for (let i = 0; i < 4 && visible(); i++)
+    ctx.runAction?.("view.toggleSidebar"), await new Promise((r) => setTimeout(r, 400));
 }
 function styleIdeWindow() {
   let el = document.createElement("style");
@@ -675,7 +688,7 @@ function styleIdeWindow() {
 }
 async function setupIdeWindow() {
   let bridge = window.hermesDesktop;
-  !sessionStorage.getItem("hermes-ide:sized") && window.outerWidth < screen.availWidth * 0.85 && (sessionStorage.setItem("hermes-ide:sized", "1"), bridge?.windowControls?.toggleMaximize?.()), ensureEditor(), styleIdeWindow(), await sizeSettled(), hideSessionList(), await frames(2), await fitColumns();
+  !sessionStorage.getItem("hermes-ide:sized") && window.outerWidth < screen.availWidth * 0.85 && (sessionStorage.setItem("hermes-ide:sized", "1"), bridge?.windowControls?.toggleMaximize?.()), ensureEditor(), styleIdeWindow(), await maximized(), await sizeSettled(), await hideSessionList(), await frames(2), await fitColumns();
   let pending = sessionStorage.getItem(PENDING_OPEN);
   if (pending) {
     sessionStorage.removeItem(PENDING_OPEN);
@@ -1604,7 +1617,7 @@ var PLUGIN_ID = "hermes-ide", plugin_default = {
         }
       ]), ctx2.onEvent(`plugin.${PLUGIN_ID}.open`, (ev) => {
         let p = ev?.payload ?? {}, focused = host3.state.focusedStoredSessionId.get();
-        typeof p.path == "string" && p.path && p.session_id && p.session_id === focused && openIdeWindow({ path: p.path, line: Number(p.line) > 0 ? Number(p.line) : void 0 });
+        typeof p.path == "string" && p.path && p.session_id && p.session_id === focused && openIdeWindow({ path: p.path, line: Number(p.line) > 0 ? Number(p.line) : void 0, sid: p.session_id });
       }), ctx2.storage.get("welcomed-v2", !1) || (ctx2.storage.set("welcomed-v2", !0), notify("info", "Press Ctrl+Alt+I, or click IDE in the status bar, to open this chat in its own IDE window.", "Hermes IDE"));
       return;
     }

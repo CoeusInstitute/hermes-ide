@@ -106,7 +106,7 @@ export default {
         const p = ev?.payload ?? {}
         const focused = host.state.focusedStoredSessionId.get()
         if (typeof p.path === 'string' && p.path && p.session_id && p.session_id === focused) {
-          void openIdeWindow({ path: p.path, line: Number(p.line) > 0 ? Number(p.line) : undefined })
+          void openIdeWindow({ path: p.path, line: Number(p.line) > 0 ? Number(p.line) : undefined, sid: p.session_id })
         }
       })
       if (!ctx.storage.get('welcomed-v2', false)) {
