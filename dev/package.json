@@ -1,6 +1,6 @@
 {
   "name": "hermes-ide",
-  "version": "0.6.4",
+  "version": "0.6.5",
   "private": true,
   "description": "Cursor-style IDE plugin for Hermes Desktop",
   "license": "MIT",

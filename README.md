@@ -1,31 +1,16 @@
-<a id="readme-top"></a>
+![Hermes IDE: a Cursor-style IDE for Hermes Desktop](docs/images/hermes-ide-banner.png)
 
-<p align="center">
-  <img src="docs/images/hermes-ide-banner.png" alt="Hermes IDE: a Cursor-style IDE for Hermes Desktop" width="100%">
-</p>
+[![Version 0.6.5](https://img.shields.io/badge/version-0.6.5-6366f1?style=flat-square)](CHANGELOG.md)
+[![Requires Hermes 0.22.5 or newer](https://img.shields.io/badge/Hermes-%E2%89%A50.22.5-4b5280?style=flat-square)](https://hermes-agent.nousresearch.com/docs/user-guide/desktop)
+[![CI status](https://github.com/CoeusInstitute/hermes-ide/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/CoeusInstitute/hermes-ide/actions/workflows/ci.yml)
+[![Install scan: safe](https://img.shields.io/badge/install%20scan-safe-2f8a57?style=flat-square)](#security-and-privacy)
+[![MIT license](https://img.shields.io/badge/license-MIT-4b5280?style=flat-square)](LICENSE)
 
-<p align="center">
-  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/version-0.6.4-6366f1?style=flat-square" alt="Version 0.6.4"></a>
-  <a href="https://hermes-agent.nousresearch.com/docs/user-guide/desktop"><img src="https://img.shields.io/badge/Hermes-%E2%89%A50.22.5-4b5280?style=flat-square" alt="Requires Hermes 0.22.5 or newer"></a>
-  <a href="https://github.com/CoeusInstitute/hermes-ide/actions/workflows/ci.yml"><img src="https://github.com/CoeusInstitute/hermes-ide/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI status"></a>
-  <a href="#security-and-privacy"><img src="https://img.shields.io/badge/install%20scan-safe-2f8a57?style=flat-square" alt="Install scan: safe"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-4b5280?style=flat-square" alt="MIT license"></a>
-</p>
+**Your code, your running app and the agent in one window, built on the chat you already have.**
 
-<p align="center">
-  <b>Your code, your running app and the agent in one window, built on the chat you already have.</b>
-  <br>
-  <a href="#quick-start">Quick start</a> ·
-  <a href="#features">Features</a> ·
-  <a href="#usage">Usage</a> ·
-  <a href="#security-and-privacy">Security</a> ·
-  <a href="docs/ARCHITECTURE.md">Architecture</a> ·
-  <a href="CHANGELOG.md">Changelog</a>
-</p>
+[Quick start](#quick-start) · [Features](#features) · [Usage](#usage) · [Security](#security-and-privacy) · [Architecture](docs/ARCHITECTURE.md) · [Changelog](CHANGELOG.md)
 
-<p align="center">
-  <img src="docs/images/ide-window.png" alt="The Hermes IDE window: Explorer, styles.css with the agent's edit under review, the project's running Vite app, and the chat holding two elements picked from the page" width="100%">
-</p>
+![The Hermes IDE window: Explorer, styles.css with the agent's edit under review, the project's running Vite app, and the chat holding two elements picked from the page](docs/images/ide-window.png)
 
 <details>
 <summary><b>Table of contents</b></summary>
@@ -76,24 +61,16 @@ It is built for front-end and full-stack work. Point at an element on the runnin
 
 **Pick an element.** One short token in the composer, written around like any other words:
 
-<p align="center">
-  <img src="docs/images/element-pick-token.png" alt="The composer holding the token [[ element 2 · &lt;h1&gt; &quot;Launch checklist&quot; ]] followed by the request: make this heading bigger and bolder" width="640">
-</p>
+![The composer holding the token for the "Launch checklist" heading, followed by the request: make this heading bigger and bolder](docs/images/element-pick-token.png)
 
-When you send, each token becomes a full description between `[[` and `]]`, and the agent works from it. Below, two picks and two edits, each checked against the running dev server:
+When you send, each token becomes a full description between `[[` and `]]`, and the agent works from it. Two picks and two edits, each checked against the running dev server:
 
-<table>
-  <tr>
-    <td width="45%" valign="top"><img src="docs/images/element-pick-chat.png" alt="Two picked-element blocks in the chat, each followed by the agent's edit to styles.css, a curl check against the dev server and a summary of what changed and what it skipped"></td>
-    <td valign="top">
-      <b>Review the edit where it landed.</b> The agent's change to <code>styles.css</code> opens as an inline diff, with <b>Accept</b> and <b>Reject</b> per hunk and <b>Keep</b> or <b>Undo</b> for the whole edit:
-      <br><br>
-      <img src="docs/images/agent-edit-review.png" alt="The editor showing styles.css with the banner 'Hermes edited this file. Review the changes inline', Keep and Undo buttons, and an Accept and Reject pair on the changed h1 rule">
-    </td>
-  </tr>
-</table>
+![Two picked-element blocks in the chat, each followed by the agent's edit to styles.css, a curl check against the dev server and a summary of what changed and what it skipped](docs/images/element-pick-chat.png)
 
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
+**Review the edit where it landed.** The agent's change to `styles.css` opens as an inline diff, with **Accept** and **Reject** per hunk and **Keep** or **Undo** for the whole edit:
+
+![The editor showing styles.css with the banner 'Hermes edited this file. Review the changes inline', Keep and Undo buttons, and an Accept and Reject pair on the changed h1 rule](docs/images/agent-edit-review.png)
+
 
 ## Quick start
 
@@ -104,6 +81,8 @@ When you send, each token becomes a full description between `[[` and `]]`, and 
 ## Install
 
 Requires Hermes **0.22.5** or newer, with Hermes Desktop.
+
+**From the plugin catalog.** Once Hermes IDE is listed, search **Hermes IDE** under **Capabilities → Plugins**, or run `hermes plugins install hermes-ide`. The catalog installs the reviewed catalog build at its pinned commit.
 
 **From the Desktop app.** Open **Capabilities → Plugins → Install from Git**, enter `CoeusInstitute/hermes-ide`, keep both the Agent plugin and Desktop UI targets checked, and click **Install**. Both halves install and turn on at once; the **IDE** button appears in the status bar without a restart.
 
@@ -129,7 +108,6 @@ Run `hermes plugins remove hermes-ide`, then delete `desktop-plugins/hermes-ide`
 
 </details>
 
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 ## Usage
 
@@ -220,13 +198,12 @@ The full build also lists IDE chats in their own **IDE** group under SESSIONS (i
 - While a chat's IDE window is open, each turn in that chat carries a short **[Hermes IDE]** note: the message comes from the IDE, what the user sees beside the chat, what a `[[ Element picked … ]]` block is, and which tools put things in front of them. The note is added to that turn only. It is not stored in the transcript and does not change the system prompt, so the prompt cache is untouched. A message that carries a picked element gets the note even after the window closes.
 - The plugin bundles a skill, **`hermes-ide:guide`**, listed in the agent's skill index while the plugin is enabled: how the IDE works, how to answer an element pick (find the source, change it rather than built output), and what the user sees after an edit.
 
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 ## Two builds of one source
 
 |  | Catalog build | Full build |
 |---|---|---|
-| Where | a tagged commit per release (`catalog-v0.6.4`), pinned by the Hermes plugin catalog | `main` (what **Install from Git** gets) |
+| Where | a tagged commit per release (`catalog-v0.6.5`), pinned by the Hermes plugin catalog | `main` (what **Install from Git** gets) |
 | Surface | the Desktop plugin SDK only: passes `hermes plugins validate` | the SDK plus a few reads of the app's own markup |
 | Explorer | a resizable panel inside the Editor column | its own column |
 | Project UI | a **Run** view beside Explorer, Search and Source Control; the page opens in the app's Browser pane | a Browser column of its own (address bar, DevTools, the page) |
@@ -263,7 +240,6 @@ What the plugin does on your machines, so you can decide before installing:
 - Catalog build: the Explorer is a panel inside the Editor column, so that column is always there (with the shortcut list until a file opens), and the app sizes its own Browser pane. It cannot size a column the app docks; your resizes last while the window is open.
 - Full build: column sizing and the IDE group depend on the app's markup, so a Desktop update can break them; the IDE then falls back to the app's even split and the badges.
 
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 ## How it fits together
 
@@ -323,4 +299,3 @@ Issues and pull requests are welcome. Before opening a pull request, run the Jav
 
 MIT. Copyright (c) 2026 Coeus Institute. See [LICENSE](LICENSE).
 
-<p align="right">(<a href="#readme-top">back to top</a>)</p>

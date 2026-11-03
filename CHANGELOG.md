@@ -2,6 +2,11 @@
 
 All notable changes to Hermes IDE. Versions follow the `version` in `plugin.yaml`.
 
+## 0.6.5 (2026-11-02)
+
+- **The README renders on the plugin catalog page.** The catalog's docs build drops raw HTML, which would have removed the banner, badges, hero screenshot and the picker and review images; they are plain Markdown now and look the same on GitHub. The README also names the catalog install route.
+- **New banner** (`docs/images/hermes-ide-banner.png`), also the catalog card image; the unused `banner.svg` is removed. The entry template in `docs/catalog/hermes-ide.yaml` is updated.
+
 ## 0.6.4 (2026-11-02)
 
 - **The element picker reports an element's own styles, not its hover styles.** While picking, the pointer now rests on a transparent shield above the page instead of the element, so `:hover` rules never apply to what you pick. Before, picking a button reported its hover color as its background. The shield steps aside only for the picker's own hit test. Check: `dev/picker-check.mjs` runs the picker in a local Chrome or Edge with real mouse input; it passes on this release and fails on 0.6.3. Verified live: four picks of a hovered button all reported the base color.
