@@ -1,7 +1,7 @@
 <a id="readme-top"></a>
 
 <p align="center">
-  <img src="docs/images/banner.svg" alt="Hermes IDE: a Cursor-style IDE for Hermes Desktop" width="100%">
+  <img src="docs/images/hermes-ide-banner.png" alt="Hermes IDE: a Cursor-style IDE for Hermes Desktop" width="100%">
 </p>
 
 <p align="center">
