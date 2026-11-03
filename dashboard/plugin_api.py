@@ -39,7 +39,7 @@ from fastapi import APIRouter, HTTPException
 # blocks the gateway event loop that every Desktop request shares.
 router = APIRouter()
 
-VERSION = "0.6.6"
+VERSION = "0.6.7"
 MAX_READ_BYTES = 5 * 1024 * 1024
 MAX_LIST_ENTRIES = 5000
 MAX_FILES = 50_000
@@ -787,6 +787,25 @@ def note_ide_sessions(ids: list[Any]) -> dict[str, Any]:
     return {"ok": True}
 
 
+# ── IDE workspaces (read by tools outside Desktop, such as a session cleanup job) ─────────────
+#
+# Desktop keeps the workspace list in its own storage; this mirror is the copy anything on disk can
+# read. The window sends the whole list on every change, so the file is replaced, never merged.
+
+IDE_WORKSPACES_FILE = "ide-workspaces.json"
+
+
+def note_ide_workspaces(chats: Any) -> dict[str, Any]:
+    if not isinstance(chats, dict) or len(chats) > 5000:
+        raise HTTPException(400, "workspaces must be an object of at most 5000 ids")
+    kept = {k: v for k, v in chats.items() if isinstance(k, str) and 0 < len(k) <= 200 and isinstance(v, (int, float))}
+    f = _data_dir() / IDE_WORKSPACES_FILE
+    tmp = f.with_name(f.name + ".tmp")
+    tmp.write_text(json.dumps({"version": 1, "updated_at": time.time(), "workspaces": kept}), encoding="utf-8")
+    os.replace(tmp, f)
+    return {"ok": True, "count": len(kept)}
+
+
 # ── routes ──────────────────────────────────────────────────────────────────────────────────
 
 
@@ -854,6 +873,12 @@ def route_ide_session(body: dict) -> dict:
         raise HTTPException(400, "ids required")
     with _os_errors():
         return note_ide_sessions(ids)
+
+
+@router.post("/ide/workspaces")
+def route_ide_workspaces(body: dict) -> dict:
+    with _os_errors():
+        return note_ide_workspaces(_body(body).get("workspaces"))
 
 
 @router.post("/health")

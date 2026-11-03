@@ -821,7 +821,11 @@ function loadIdeChats() {
   $ideChats.set(v && typeof v == "object" && !Array.isArray(v) ? v : {});
 }
 function setIdeChats(next) {
-  $ideChats.set(next), ctx.storage.set(IDE_CHATS, next);
+  $ideChats.set(next), ctx.storage.set(IDE_CHATS, next), mirrorIdeChats();
+}
+function mirrorIdeChats() {
+  call("/ide/workspaces", { workspaces: $ideChats.get() }).catch(() => {
+  });
 }
 function markIdeChat(id2) {
   id2 && (loadIdeChats(), setIdeChats({ ...$ideChats.get(), [id2]: Date.now() }));
@@ -1381,7 +1385,7 @@ async function refreshRows() {
     let row = rows.find((r) => matches(r, id2)), key = row ? durable(row) : id2;
     key !== id2 && (changed = !0), next[key] = Math.max(next[key] || 0, at);
   }
-  changed && setIdeChats(next);
+  changed ? setIdeChats(next) : mirrorIdeChats();
 }
 async function newIdeWorkspace() {
   let sid;

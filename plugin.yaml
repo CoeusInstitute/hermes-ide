@@ -1,5 +1,5 @@
 name: hermes-ide
-version: 0.6.6
+version: 0.6.7
 description: "Cursor-style IDE for Hermes Desktop: any chat opens in its own IDE window with an Explorer, a tabbed CodeMirror editor, workspace search, git status and Quick Open beside the real session chat, in columns you drag into any arrangement. Finds your project's web UI, runs its dev server after you trust it, and opens the page in the app's Browser, where an element picker hands elements (selector, markup, styles, the React, Vue or Svelte component and its source line) to the chat as compact tokens. Add to Chat, inline edit and agent-edit review (Keep/Undo) are wired to the session. One package: desktop UI, backend routes on the agent's machine, an ide_open tool, and a note plus a bundled skill that tell the agent when a message comes from the IDE."
 author: "Coeus Institute"
 license: MIT

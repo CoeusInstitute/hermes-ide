@@ -287,6 +287,19 @@ def test_ide_ack_route_validates_and_stores(client, tmp_path, monkeypatch):
     assert post(client, "/ide/ack", request_id="../../evil", status="x").status_code == 400
 
 
+def test_ide_workspaces_mirror_replaces_the_list(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(api, "_data_dir", lambda: tmp_path)
+    f = tmp_path / "ide-workspaces.json"
+    assert post(client, "/ide/workspaces", workspaces={"local-a": 1, "local-b": 2, "": 3, "local-c": "x"}).json()["count"] == 2
+    assert json.loads(f.read_text())["workspaces"] == {"local-a": 1, "local-b": 2}
+    # The window sends the whole list: a removed workspace leaves the file.
+    post(client, "/ide/workspaces", workspaces={"local-b": 2})
+    data = json.loads(f.read_text())
+    assert data["workspaces"] == {"local-b": 2} and data["version"] == 1 and data["updated_at"] > 0
+    assert post(client, "/ide/workspaces", workspaces=["local-a"]).status_code == 400
+    assert json.loads(f.read_text())["workspaces"] == {"local-b": 2}
+
+
 # ── project UI detection and dev servers ───────────────────────────────────────────────────
 
 

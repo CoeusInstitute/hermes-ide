@@ -2,6 +2,10 @@
 
 All notable changes to Hermes IDE. Versions follow the `version` in `plugin.yaml`.
 
+## 0.6.7 (2026-11-03)
+
+- **The IDE workspace list is readable outside Desktop.** Desktop keeps the list of IDE workspaces in its own storage, which nothing else on the machine can read. The IDE now writes a copy to `ide-workspaces.json` in the plugin's data folder (`plugin-data/hermes-ide/`) whenever the list changes and once a minute from the main window, as `{"version": 1, "updated_at": <epoch seconds>, "workspaces": {"<session id>": <epoch ms>}}`. The file is replaced each time, so a workspace removed from the IDE group leaves it. A session cleanup job uses it to keep IDE workspaces instead of deleting them. New backend route `POST /ide/workspaces`.
+
 ## 0.6.6 (2026-11-03)
 
 - **Only IDE workspaces are IDE chats.** A chat is listed in the IDE group (and gets the IDE badge) only when it was created as an IDE workspace: the **IDE** button in the status bar, the group's **+**, or **New IDE workspace** in the IDE chats menu. Before, any chat ever opened in an IDE window was listed, and stayed listed, so Ctrl+Alt+I on an ordinary chat (or, before 0.6, the status-bar button on whatever chat was focused) filed it under IDE. Those chats can still open in an IDE window; they just stay in their normal place in the session list.

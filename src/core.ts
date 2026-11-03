@@ -1174,6 +1174,12 @@ export function loadIdeChats() {
 export function setIdeChats(next: Record<string, number>) {
   $ideChats.set(next)
   ctx.storage.set(IDE_CHATS, next)
+  mirrorIdeChats()
+}
+
+/** Copy the list to the backend's data folder, where jobs outside Desktop (session cleanup) read it. */
+export function mirrorIdeChats() {
+  void call('/ide/workspaces', { workspaces: $ideChats.get() }).catch(() => undefined)
 }
 
 /** Remember a chat as an IDE chat (by any of its ids; the sidebar maps it to the durable one). */

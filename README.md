@@ -1,6 +1,6 @@
 ![Hermes IDE: a Cursor-style IDE for Hermes Desktop](docs/images/hermes-ide-banner.png)
 
-[![Version 0.6.6](https://img.shields.io/badge/version-0.6.6-6366f1?style=flat-square)](CHANGELOG.md)
+[![Version 0.6.7](https://img.shields.io/badge/version-0.6.7-6366f1?style=flat-square)](CHANGELOG.md)
 [![Requires Hermes 0.22.5 or newer](https://img.shields.io/badge/Hermes-%E2%89%A50.22.5-4b5280?style=flat-square)](https://hermes-agent.nousresearch.com/docs/user-guide/desktop)
 [![CI status](https://github.com/CoeusInstitute/hermes-ide/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/CoeusInstitute/hermes-ide/actions/workflows/ci.yml)
 [![Install scan: safe](https://img.shields.io/badge/install%20scan-safe-2f8a57?style=flat-square)](#security-and-privacy)
@@ -203,7 +203,7 @@ The full build also lists IDE chats in their own **IDE** group under SESSIONS (i
 
 |  | Catalog build | Full build |
 |---|---|---|
-| Where | a tagged commit per release (`catalog-v0.6.6`), pinned by the Hermes plugin catalog | `main` (what **Install from Git** gets) |
+| Where | a tagged commit per release (`catalog-v0.6.7`), pinned by the Hermes plugin catalog | `main` (what **Install from Git** gets) |
 | Surface | the Desktop plugin SDK only: passes `hermes plugins validate` | the SDK plus a few reads of the app's own markup |
 | Explorer | a resizable panel inside the Editor column | its own column |
 | Project UI | a **Run** view beside Explorer, Search and Source Control; the page opens in the app's Browser pane | a Browser column of its own (address bar, DevTools, the page) |

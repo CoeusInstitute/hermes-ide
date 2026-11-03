@@ -3,7 +3,7 @@
 
 import { atom, host } from '@hermes/plugin-sdk'
 
-import { $ideChats, ctx, loadIdeChats, markIdeChat, notify, openIdeWindow, setIdeChats } from './core'
+import { $ideChats, ctx, loadIdeChats, markIdeChat, mirrorIdeChats, notify, openIdeWindow, setIdeChats } from './core'
 
 export interface Row {
   id: string
@@ -59,6 +59,7 @@ export async function refreshRows() {
     next[key] = Math.max(next[key] || 0, at)
   }
   if (changed) setIdeChats(next)
+  else mirrorIdeChats() // keeps the on-disk copy current after a backend restart or an older version
 }
 
 /** A new IDE workspace: a new chat, its IDE window, and a prompt there to choose or create the

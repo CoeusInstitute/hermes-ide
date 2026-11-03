@@ -96,6 +96,7 @@ Evidence is from a sandboxed packaged Desktop at 3840 px driven over CDP with re
 | New IDE chat | New agent | Add **+** on the group: a new chat that opens in the IDE after its first message | Sent the first message: its IDE window opened and the group listed two chats, newest first |
 | Remove from IDE chats | n/a | Add **×** on a group row | The chat went back to the normal list, no badge, nothing hidden |
 | Only IDE workspaces are IDE chats (0.6.6) | n/a | Tag a chat only in `newIdeWorkspace`; opening a chat in an IDE window no longer tags it; drop the untyped pre-0.6.6 list | After the update the IDE group held no chats that had only been opened with Ctrl+Alt+I; a chat opened with Ctrl+Alt+I and its window reloaded stayed in its date group; a workspace from the IDE button was listed |
+| Workspace list mirrored to disk (0.6.7) | n/a | `setIdeChats` and the main window's row refresh send the whole list to `POST /ide/workspaces`, which replaces `plugin-data/hermes-ide/ide-workspaces.json` | Backend test: the file holds only valid ids, a removed id leaves it, a malformed body is refused and leaves the file as it was. Live check, due after the gateway restart that loads 0.6.7: the file lists the same ids as the IDE group |
 
 ## Gate 0: shipped in v0.1, reworked in v0.2 to a pop-out IDE window (verified in a sandboxed Desktop, 2026-11-01)
 
