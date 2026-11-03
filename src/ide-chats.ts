@@ -85,7 +85,7 @@ export async function newIdeWorkspace() {
  *  focus). */
 export function initIdeChats() {
   const onStorage = (e: StorageEvent) => {
-    if (e.key === 'hermes.plugin.hermes-ide.ideChats') {
+    if (e.key === 'hermes.plugin.hermes-ide.ideWorkspaces') {
       loadIdeChats()
       void refreshRows()
     }

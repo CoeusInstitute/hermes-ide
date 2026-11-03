@@ -1154,12 +1154,19 @@ function detectIdeWindow(): boolean {
 
 export const IDE_WINDOW = detectIdeWindow()
 
-// ── IDE chats: the chats opened in an IDE window, listed in their own sidebar group ─────────
+// ── IDE chats: the IDE workspaces, listed in their own sidebar group ─────────────────────────
+// A chat is an IDE chat only when it was created as one (the IDE button, the group's +, New IDE
+// workspace). Opening any other chat in an IDE window (Ctrl+Alt+I, an agent's ide_open) does not
+// make it one.
 
-const IDE_CHATS = 'ideChats'
+const IDE_CHATS = 'ideWorkspaces'
+/** Before 0.6.6 every chat ever opened in an IDE window was listed here, with no record of how;
+ *  those entries cannot be told apart from real workspaces, so they are dropped. */
+const LEGACY_IDE_CHATS = 'ideChats'
 export const $ideChats = atom<Record<string, number>>({})
 
 export function loadIdeChats() {
+  if (ctx.storage.get(LEGACY_IDE_CHATS, null) !== null) ctx.storage.remove(LEGACY_IDE_CHATS)
   const v = ctx.storage.get(IDE_CHATS, {})
   $ideChats.set(v && typeof v === 'object' && !Array.isArray(v) ? v : {})
 }
@@ -1221,7 +1228,6 @@ export async function openIdeWindow(open?: Pending & { sid?: string }) {
     return
   }
   localStorage.setItem(requestKey(sid), JSON.stringify(req))
-  markIdeChat(sid)
   try {
     // The app's own pop-out for one chat; it resolves the chat's profile and backend itself.
     await host.openSession(sid, { intent: 'window' })
@@ -1365,7 +1371,6 @@ function maximizeOnce() {
 /** IDE window boot: take the room an IDE needs, rebuild the columns beside the chat and hide the
  *  session list. The full build also sizes the columns. */
 export async function setupIdeWindow() {
-  markIdeChat(windowSessionId())
   maximizeOnce()
   if (!__CATALOG__) fullWindowSetup()
   // Take the final width and drop the session list BEFORE the columns dock: tiles docked into a

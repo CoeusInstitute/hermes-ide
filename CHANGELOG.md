@@ -2,6 +2,11 @@
 
 All notable changes to Hermes IDE. Versions follow the `version` in `plugin.yaml`.
 
+## 0.6.6 (2026-11-03)
+
+- **Only IDE workspaces are IDE chats.** A chat is listed in the IDE group (and gets the IDE badge) only when it was created as an IDE workspace: the **IDE** button in the status bar, the group's **+**, or **New IDE workspace** in the IDE chats menu. Before, any chat ever opened in an IDE window was listed, and stayed listed, so Ctrl+Alt+I on an ordinary chat (or, before 0.6, the status-bar button on whatever chat was focused) filed it under IDE. Those chats can still open in an IDE window; they just stay in their normal place in the session list.
+- **The IDE list starts clean.** The old list recorded no origin, so its real workspaces cannot be told apart from chats that were only opened in the IDE; it is dropped on first load (storage key `ideChats` is removed, the list now lives in `ideWorkspaces`). New workspaces are listed as before.
+
 ## 0.6.5 (2026-11-02)
 
 - **The README renders on the plugin catalog page.** The catalog's docs build drops raw HTML, which would have removed the banner, badges, hero screenshot and the picker and review images; they are plain Markdown now and look the same on GitHub. The README also names the catalog install route.

@@ -1483,7 +1483,7 @@ function IdeChatsMenu() {
               </button>
             ))
           ) : (
-            <div className="hi-chats-empty">Chats you open in the IDE are listed here, and their rows in the session list carry an IDE badge.</div>
+            <div className="hi-chats-empty">New IDE workspaces are listed here, and their rows in the session list carry an IDE badge.</div>
           )}
         </div>
         <div className="hi-chats-sep" />

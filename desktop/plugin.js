@@ -814,8 +814,9 @@ function claimRequest() {
 function detectIdeWindow() {
   return isPopout() ? sessionStorage.getItem(WINDOW_MARK) === "1" ? !0 : claimRequest() ? (sessionStorage.setItem(WINDOW_MARK, "1"), !0) : !1 : !1;
 }
-var IDE_WINDOW = detectIdeWindow(), IDE_CHATS = "ideChats", $ideChats = atom({});
+var IDE_WINDOW = detectIdeWindow(), IDE_CHATS = "ideWorkspaces", LEGACY_IDE_CHATS = "ideChats", $ideChats = atom({});
 function loadIdeChats() {
+  ctx.storage.get(LEGACY_IDE_CHATS, null) !== null && ctx.storage.remove(LEGACY_IDE_CHATS);
   let v = ctx.storage.get(IDE_CHATS, {});
   $ideChats.set(v && typeof v == "object" && !Array.isArray(v) ? v : {});
 }
@@ -856,7 +857,7 @@ async function openIdeWindow(open) {
     pending && sessionStorage.setItem(PENDING_OPEN, JSON.stringify(pending)), location.reload();
     return;
   }
-  localStorage.setItem(requestKey(sid), JSON.stringify(req)), markIdeChat(sid);
+  localStorage.setItem(requestKey(sid), JSON.stringify(req));
   try {
     await host.openSession(sid, { intent: "window" });
   } catch (e) {
@@ -919,7 +920,7 @@ function maximizeOnce() {
   !sessionStorage.getItem("hermes-ide:sized") && window.outerWidth < screen.availWidth * 0.85 && (sessionStorage.setItem("hermes-ide:sized", "1"), window.hermesDesktop?.windowControls?.toggleMaximize?.());
 }
 async function setupIdeWindow() {
-  markIdeChat(windowSessionId()), maximizeOnce(), fullWindowSetup(), await maximized(), await sizeSettled(), await hideSessionList(), await restoreLayout();
+  maximizeOnce(), fullWindowSetup(), await maximized(), await sizeSettled(), await hideSessionList(), await restoreLayout();
   let want = $active.get() ?? $tabs.get()[0]?.path;
   want && !meta.has(pathKey(want)) && closers.has("editor") && activate(want), await frames(2), await fitColumns(), layoutState.ready = !0, saveLayout();
 }
@@ -1396,7 +1397,7 @@ async function newIdeWorkspace() {
 }
 function initIdeChats() {
   let onStorage = (e) => {
-    e.key === "hermes.plugin.hermes-ide.ideChats" && (loadIdeChats(), refreshRows());
+    e.key === "hermes.plugin.hermes-ide.ideWorkspaces" && (loadIdeChats(), refreshRows());
   }, onFocus = () => void refreshRows();
   window.addEventListener("storage", onStorage), window.addEventListener("focus", onFocus);
   let tick = window.setInterval(onFocus, 6e4), offTurn = host3.onEvent?.("message.complete", (ev) => {
@@ -1452,7 +1453,7 @@ function render() {
     e.stopPropagation(), newIdeWorkspace();
   }, head.append(label, add2), group.append(head), !collapsed) {
     if (!list2.length) {
-      group.append(el("div", "hi-sb-empty", "Chats you open in the IDE are listed here."));
+      group.append(el("div", "hi-sb-empty", "New IDE workspaces are listed here. Start one with + or the IDE button."));
       return;
     }
     for (let r of list2) {
@@ -31436,7 +31437,7 @@ function IdeChatsMenu() {
             children: icon("close", 12)
           }
         )
-      ] }, durable(r))) : /* @__PURE__ */ jsx3("div", { className: "hi-chats-empty", children: "Chats you open in the IDE are listed here, and their rows in the session list carry an IDE badge." }) }),
+      ] }, durable(r))) : /* @__PURE__ */ jsx3("div", { className: "hi-chats-empty", children: "New IDE workspaces are listed here, and their rows in the session list carry an IDE badge." }) }),
       /* @__PURE__ */ jsx3("div", { className: "hi-chats-sep" }),
       /* @__PURE__ */ jsxs2("button", { className: "hi-chat", onClick: () => {
         setOpen(!1), openIdeWindow();

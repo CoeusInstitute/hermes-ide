@@ -85,7 +85,7 @@ function render() {
   group.append(head)
   if (collapsed) return
   if (!list.length) {
-    group.append(el('div', 'hi-sb-empty', 'Chats you open in the IDE are listed here.'))
+    group.append(el('div', 'hi-sb-empty', 'New IDE workspaces are listed here. Start one with + or the IDE button.'))
     return
   }
   for (const r of list) {

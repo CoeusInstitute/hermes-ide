@@ -95,6 +95,7 @@ Evidence is from a sandboxed packaged Desktop at 3840 px driven over CDP with re
 | Pinned IDE chats are marked | n/a | Add an `IDE` badge in the accent colour | Badge shown in Pinned; the group dropped the chat at once and took it back on unpin |
 | New IDE chat | New agent | Add **+** on the group: a new chat that opens in the IDE after its first message | Sent the first message: its IDE window opened and the group listed two chats, newest first |
 | Remove from IDE chats | n/a | Add **×** on a group row | The chat went back to the normal list, no badge, nothing hidden |
+| Only IDE workspaces are IDE chats (0.6.6) | n/a | Tag a chat only in `newIdeWorkspace`; opening a chat in an IDE window no longer tags it; drop the untyped pre-0.6.6 list | After the update the IDE group held no chats that had only been opened with Ctrl+Alt+I; a chat opened with Ctrl+Alt+I and its window reloaded stayed in its date group; a workspace from the IDE button was listed |
 
 ## Gate 0: shipped in v0.1, reworked in v0.2 to a pop-out IDE window (verified in a sandboxed Desktop, 2026-11-01)
 
