@@ -14,8 +14,8 @@ The catalog is a human-reviewed directory in [NousResearch/hermes-agent](https:/
 | `requires_hermes` truthful and declared in `plugin.yaml` | `>=0.22.5`, the version both builds were verified on |
 | README with disclosures, screenshots | Yes |
 | CI on the repo | `.github/workflows/ci.yml` (tests and reproducible bundles) |
-| **Public repository** | **No. The owner must make `CoeusInstitute/hermes-ide` public before the PR.** |
-| Entry PR opened | No (owner decision) |
+| Public repository | Yes. Rulesets keep `main` from force-push or deletion and make `v*` / `catalog-v*` tags immutable, so the pinned commit stays fetchable; secret scanning with push protection, private vulnerability reporting, and approval for workflows from outside contributors are on |
+| Entry PR opened | [NousResearch/hermes-agent#148226](https://github.com/NousResearch/hermes-agent/pull/148226), pinned to `87855854d3a2c536a433fb3ad1f8e03622918062` (`catalog-v0.6.5`). Hook request for the maximize call: [#148224](https://github.com/NousResearch/hermes-agent/issues/148224) |
 
 ## Steps for the owner
 
