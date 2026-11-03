@@ -15,7 +15,7 @@ The catalog is a human-reviewed directory in [NousResearch/hermes-agent](https:/
 | README with disclosures, screenshots | Yes |
 | CI on the repo | `.github/workflows/ci.yml` (tests and reproducible bundles) |
 | Public repository | Yes. Rulesets keep `main` from force-push or deletion and make `v*` / `catalog-v*` tags immutable, so the pinned commit stays fetchable; secret scanning with push protection, private vulnerability reporting, and approval for workflows from outside contributors are on |
-| Entry PR opened | [NousResearch/hermes-agent#148226](https://github.com/NousResearch/hermes-agent/pull/148226), pinned to `87855854d3a2c536a433fb3ad1f8e03622918062` (`catalog-v0.6.6`). Hook request for the maximize call: [#148224](https://github.com/NousResearch/hermes-agent/issues/148224) |
+| Entry PR opened | [NousResearch/hermes-agent#148226](https://github.com/NousResearch/hermes-agent/pull/148226), pinned to `d6c88b0dfd817a8de82141a8e621d892c99d6615` (`catalog-v0.6.6`; first submitted at `87855854d3a2c536a433fb3ad1f8e03622918062`, `catalog-v0.6.5`). Hook request for the maximize call: [#148224](https://github.com/NousResearch/hermes-agent/issues/148224) |
 
 ## Steps for the owner
 
